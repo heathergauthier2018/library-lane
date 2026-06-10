@@ -1,4 +1,9 @@
 package com.librarylane.enums;
 
-public class ReadingStatus {
+public enum ReadingStatus {
+    TBR,
+    CURRENTLY_READING,
+    COMPLETED,
+    DNF,
+    PAUSED
 }

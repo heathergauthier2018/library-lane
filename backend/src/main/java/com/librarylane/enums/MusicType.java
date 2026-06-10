@@ -1,4 +1,9 @@
 package com.librarylane.enums;
 
-public class MusicType {
+public enum MusicType {
+    SONG,
+    PLAYLIST,
+    ALBUM,
+    ARTIST,
+    OTHER
 }

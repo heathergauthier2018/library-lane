@@ -1,4 +1,6 @@
 package com.librarylane.enums;
 
-public class UserRole {
+public enum UserRole {
+    USER,
+    ADMIN
 }

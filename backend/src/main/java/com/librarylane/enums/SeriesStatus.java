@@ -1,4 +1,8 @@
 package com.librarylane.enums;
 
-public class SeriesStatus {
+public enum SeriesStatus {
+    ONGOING,
+    COMPLETED,
+    HIATUS,
+    CANCELLED
 }

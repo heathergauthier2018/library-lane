@@ -1,4 +1,8 @@
 package com.librarylane.enums;
 
-public class GoalStatus {
+public enum GoalStatus {
+    ACTIVE,
+    COMPLETED,
+    PAUSED,
+    CANCELLED
 }

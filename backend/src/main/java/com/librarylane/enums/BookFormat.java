@@ -1,4 +1,7 @@
 package com.librarylane.enums;
 
-public class BookFormat {
+public enum BookFormat {
+    PHYSICAL,
+    EBOOK,
+    AUDIOBOOK
 }
