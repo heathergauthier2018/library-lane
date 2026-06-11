@@ -27,6 +27,16 @@ public class ReadingExperienceController {
         return readingExperienceService.getReadingExperienceById(id);
     }
 
+    @GetMapping("/book/{bookId}")
+    public List<ReadingExperience> getReadingExperiencesByBookId(@PathVariable Long bookId) {
+        return readingExperienceService.getReadingExperiencesByBookId(bookId);
+    }
+
+    @GetMapping("/book/{bookId}/current")
+    public ReadingExperience getCurrentReadingExperienceForBook(@PathVariable Long bookId) {
+        return readingExperienceService.getCurrentReadingExperienceForBook(bookId);
+    }
+
     @PostMapping
     public ReadingExperience createReadingExperience(@RequestBody ReadingExperience readingExperience) {
         return readingExperienceService.createReadingExperience(readingExperience);

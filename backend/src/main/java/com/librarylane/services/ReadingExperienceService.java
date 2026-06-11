@@ -1,6 +1,8 @@
 package com.librarylane.services;
 
+import com.librarylane.entities.Book;
 import com.librarylane.entities.ReadingExperience;
+import com.librarylane.repositories.BookRepository;
 import com.librarylane.repositories.ReadingExperienceRepository;
 import org.springframework.stereotype.Service;
 
@@ -10,9 +12,13 @@ import java.util.List;
 public class ReadingExperienceService {
 
     private final ReadingExperienceRepository readingExperienceRepository;
+    private final BookRepository bookRepository;
 
-    public ReadingExperienceService(ReadingExperienceRepository readingExperienceRepository) {
+    public ReadingExperienceService(
+            ReadingExperienceRepository readingExperienceRepository,
+            BookRepository bookRepository) {
         this.readingExperienceRepository = readingExperienceRepository;
+        this.bookRepository = bookRepository;
     }
 
     public List<ReadingExperience> getAllReadingExperiences() {
@@ -24,7 +30,23 @@ public class ReadingExperienceService {
                 .orElseThrow(() -> new RuntimeException("Reading experience not found with id: " + id));
     }
 
+    public List<ReadingExperience> getReadingExperiencesByBookId(Long bookId) {
+        return readingExperienceRepository.findByBookId(bookId);
+    }
+
+    public ReadingExperience getCurrentReadingExperienceForBook(Long bookId) {
+        return readingExperienceRepository.findByBookIdAndCurrentExperienceTrue(bookId)
+                .orElseThrow(() -> new RuntimeException("Current reading experience not found for book id: " + bookId));
+    }
+
     public ReadingExperience createReadingExperience(ReadingExperience readingExperience) {
+        Long bookId = readingExperience.getBook().getId();
+
+        Book book = bookRepository.findById(bookId)
+                .orElseThrow(() -> new RuntimeException("Book not found with id: " + bookId));
+
+        readingExperience.setBook(book);
+
         return readingExperienceRepository.save(readingExperience);
     }
 
