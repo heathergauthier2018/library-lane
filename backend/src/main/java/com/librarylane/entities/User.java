@@ -57,6 +57,7 @@ public class User {
             orphanRemoval = true
     )
     @Builder.Default
+    @JsonIgnore
     private Set<ReadingGoal> readingGoals = new HashSet<>();
 
     @CreationTimestamp
