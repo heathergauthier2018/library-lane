@@ -43,4 +43,9 @@ public class AuthorController {
     public void deleteAuthor(@PathVariable Long id) {
         authorService.deleteAuthor(id);
     }
+
+    @GetMapping("/search")
+    public List<Author> searchAuthors(@RequestParam String keyword) {
+        return authorService.searchAuthors(keyword);
+    }
 }

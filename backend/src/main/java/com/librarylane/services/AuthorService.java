@@ -25,6 +25,7 @@ public class AuthorService {
     }
 
     public Author createAuthor(Author author) {
+        checkForDuplicateAuthor(author);
         return authorRepository.save(author);
     }
 
@@ -46,5 +47,36 @@ public class AuthorService {
 
     public void deleteAuthor(Long id) {
         authorRepository.deleteById(id);
+    }
+
+    public List<Author> searchAuthors(String keyword) {
+        return authorRepository
+                .findByFirstNameContainingIgnoreCaseOrLastNameContainingIgnoreCaseOrPenNameContainingIgnoreCase(
+                        keyword,
+                        keyword,
+                        keyword
+                );
+    }
+
+    private void checkForDuplicateAuthor(Author author) {
+        if (author.getFirstName() != null && author.getLastName() != null) {
+            authorRepository
+                    .findByFirstNameIgnoreCaseAndLastNameIgnoreCase(
+                            author.getFirstName(),
+                            author.getLastName()
+                    )
+                    .ifPresent(existing -> {
+                        throw new RuntimeException("Author already exists: "
+                                + author.getFirstName() + " " + author.getLastName());
+                    });
+        }
+
+        if (author.getPenName() != null && !author.getPenName().isBlank()) {
+            authorRepository.findByPenNameIgnoreCase(author.getPenName())
+                    .ifPresent(existing -> {
+                        throw new RuntimeException("Author already exists with pen name: "
+                                + author.getPenName());
+                    });
+        }
     }
 }
