@@ -5,6 +5,7 @@ import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.LocalDateTime;
+import com.fasterxml.jackson.annotation.JsonBackReference;
 
 @Entity
 @Table(name = "journal_entries")
@@ -34,6 +35,7 @@ public class JournalEntry {
 
     @ManyToOne
     @JoinColumn(name = "reading_experience_id", nullable = false)
+    @JsonBackReference
     private ReadingExperience readingExperience;
 
     @CreationTimestamp
