@@ -21,4 +21,6 @@ public interface BookRepository extends JpaRepository<Book, Long> {
     List<Book> findByOwnedTrue();
 
     List<Book> findByOwnedTrueAndCurrentStatus(ReadingStatus currentStatus);
+
+    List<Book> findByGenresNameIgnoreCase(String genreName);
 }

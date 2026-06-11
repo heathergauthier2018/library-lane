@@ -10,4 +10,6 @@ public interface QuoteRepository extends JpaRepository<Quote, Long> {
     List<Quote> findByBookId(Long bookId);
 
     List<Quote> findByFavoriteTrue();
+
+    List<Quote> findTop5ByOrderByCreatedAtDesc();
 }

@@ -43,4 +43,24 @@ public class ReadingGoalController {
     public void deleteReadingGoal(@PathVariable Long id) {
         readingGoalService.deleteReadingGoal(id);
     }
+
+    @GetMapping("/user/{userId}")
+    public List<ReadingGoal> getReadingGoalsByUser(@PathVariable Long userId) {
+        return readingGoalService.getReadingGoalsByUser(userId);
+    }
+
+    @GetMapping("/active")
+    public List<ReadingGoal> getActiveReadingGoals() {
+        return readingGoalService.getActiveReadingGoals();
+    }
+
+    @GetMapping("/completed")
+    public List<ReadingGoal> getCompletedReadingGoals() {
+        return readingGoalService.getCompletedReadingGoals();
+    }
+
+    @GetMapping("/type/{goalType}")
+    public List<ReadingGoal> getReadingGoalsByType(@PathVariable String goalType) {
+        return readingGoalService.getReadingGoalsByType(goalType);
+    }
 }

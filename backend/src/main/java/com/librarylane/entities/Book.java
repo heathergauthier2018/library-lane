@@ -1,5 +1,6 @@
 package com.librarylane.entities;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.librarylane.enums.BookFormat;
 import com.librarylane.enums.ReadingStatus;
 import jakarta.persistence.*;
@@ -12,7 +13,6 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Set;
-import com.fasterxml.jackson.annotation.JsonIgnore;
 
 @Entity
 @Table(name = "books")
@@ -88,6 +88,15 @@ public class Book {
     @Builder.Default
     private Set<Author> authors = new HashSet<>();
 
+    @ManyToMany
+    @JoinTable(
+            name = "book_genres",
+            joinColumns = @JoinColumn(name = "book_id"),
+            inverseJoinColumns = @JoinColumn(name = "genre_id")
+    )
+    @Builder.Default
+    private Set<Genre> genres = new HashSet<>();
+
     @OneToMany(mappedBy = "book", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
     @JsonIgnore
@@ -95,6 +104,7 @@ public class Book {
 
     @OneToMany(mappedBy = "book", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
+    @JsonIgnore
     private Set<Quote> quotes = new HashSet<>();
 
     @CreationTimestamp

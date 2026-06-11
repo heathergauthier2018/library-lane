@@ -37,11 +37,24 @@ public class JournalEntryService {
         existingJournalEntry.setChapterName(updatedJournalEntry.getChapterName());
         existingJournalEntry.setMood(updatedJournalEntry.getMood());
         existingJournalEntry.setSpoilerWarning(updatedJournalEntry.getSpoilerWarning());
+        existingJournalEntry.setFavorite(updatedJournalEntry.getFavorite());
 
         return journalEntryRepository.save(existingJournalEntry);
     }
 
     public void deleteJournalEntry(Long id) {
         journalEntryRepository.deleteById(id);
+    }
+
+    public List<JournalEntry> getJournalEntriesByReadingExperience(Long readingExperienceId) {
+        return journalEntryRepository.findByReadingExperienceId(readingExperienceId);
+    }
+
+    public List<JournalEntry> getFavoriteJournalEntries() {
+        return journalEntryRepository.findByFavoriteTrue();
+    }
+
+    public List<JournalEntry> getJournalEntriesByMood(String mood) {
+        return journalEntryRepository.findByMoodIgnoreCase(mood);
     }
 }

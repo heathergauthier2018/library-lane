@@ -1,11 +1,11 @@
 package com.librarylane.entities;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.LocalDateTime;
-import com.fasterxml.jackson.annotation.JsonBackReference;
 
 @Entity
 @Table(name = "journal_entries")
@@ -32,6 +32,8 @@ public class JournalEntry {
     private String mood;
 
     private Boolean spoilerWarning;
+
+    private Boolean favorite;
 
     @ManyToOne
     @JoinColumn(name = "reading_experience_id", nullable = false)

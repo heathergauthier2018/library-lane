@@ -1,19 +1,26 @@
 package com.librarylane.services;
 
 import com.librarylane.entities.Book;
+import com.librarylane.entities.Genre;
 import com.librarylane.enums.ReadingStatus;
 import com.librarylane.repositories.BookRepository;
+import com.librarylane.repositories.GenreRepository;
 import org.springframework.stereotype.Service;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 public class BookService {
 
     private final BookRepository bookRepository;
+    private final GenreRepository genreRepository;
 
-    public BookService(BookRepository bookRepository) {
+    public BookService(BookRepository bookRepository, GenreRepository genreRepository) {
         this.bookRepository = bookRepository;
+        this.genreRepository = genreRepository;
     }
 
     public List<Book> getAllBooks() {
@@ -26,6 +33,7 @@ public class BookService {
     }
 
     public Book createBook(Book book) {
+        book.setGenres(resolveGenres(book.getGenres()));
         return bookRepository.save(book);
     }
 
@@ -52,6 +60,7 @@ public class BookService {
         existingBook.setOwned(updatedBook.getOwned());
         existingBook.setWishlist(updatedBook.getWishlist());
         existingBook.setDnf(updatedBook.getDnf());
+        existingBook.setGenres(resolveGenres(updatedBook.getGenres()));
 
         return bookRepository.save(existingBook);
     }
@@ -94,5 +103,31 @@ public class BookService {
 
     public List<Book> getOwnedBooks() {
         return bookRepository.findByOwnedTrue();
+    }
+
+    public List<Book> getBooksByGenre(String genreName) {
+        return bookRepository.findByGenresNameIgnoreCase(genreName);
+    }
+
+    private Set<Genre> resolveGenres(Set<Genre> incomingGenres) {
+        if (incomingGenres == null || incomingGenres.isEmpty()) {
+            return new HashSet<>();
+        }
+
+        return incomingGenres.stream()
+                .map(genre -> {
+                    if (genre.getId() != null) {
+                        return genreRepository.findById(genre.getId())
+                                .orElseThrow(() -> new RuntimeException("Genre not found with id: " + genre.getId()));
+                    }
+
+                    if (genre.getName() != null && !genre.getName().isBlank()) {
+                        return genreRepository.findByNameIgnoreCase(genre.getName())
+                                .orElseGet(() -> genreRepository.save(genre));
+                    }
+
+                    throw new RuntimeException("Genre must have either id or name.");
+                })
+                .collect(Collectors.toSet());
     }
 }

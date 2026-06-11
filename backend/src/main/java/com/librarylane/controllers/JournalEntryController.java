@@ -43,4 +43,19 @@ public class JournalEntryController {
     public void deleteJournalEntry(@PathVariable Long id) {
         journalEntryService.deleteJournalEntry(id);
     }
+
+    @GetMapping("/reading-experience/{id}")
+    public List<JournalEntry> getJournalEntriesByReadingExperience(@PathVariable Long id) {
+        return journalEntryService.getJournalEntriesByReadingExperience(id);
+    }
+
+    @GetMapping("/favorites")
+    public List<JournalEntry> getFavoriteJournalEntries() {
+        return journalEntryService.getFavoriteJournalEntries();
+    }
+
+    @GetMapping("/mood/{mood}")
+    public List<JournalEntry> getJournalEntriesByMood(@PathVariable String mood) {
+        return journalEntryService.getJournalEntriesByMood(mood);
+    }
 }
