@@ -36,12 +36,56 @@ public class BookController {
     public Book updateBook(
             @PathVariable Long id,
             @RequestBody Book book) {
-
         return bookService.updateBook(id, book);
     }
 
     @DeleteMapping("/{id}")
     public void deleteBook(@PathVariable Long id) {
         bookService.deleteBook(id);
+    }
+
+    @GetMapping("/search")
+    public List<Book> searchBooksByTitle(@RequestParam String title) {
+        return bookService.searchBooksByTitle(title);
+    }
+
+    @GetMapping("/wishlist")
+    public List<Book> getWishlistBooks() {
+        return bookService.getWishlistBooks();
+    }
+
+    @GetMapping("/tbr")
+    public List<Book> getTbrBooks() {
+        return bookService.getTbrBooks();
+    }
+
+    @GetMapping("/currently-reading")
+    public List<Book> getCurrentlyReadingBooks() {
+        return bookService.getCurrentlyReadingBooks();
+    }
+
+    @GetMapping("/completed")
+    public List<Book> getCompletedBooks() {
+        return bookService.getCompletedBooks();
+    }
+
+    @GetMapping("/dnf")
+    public List<Book> getDnfBooks() {
+        return bookService.getDnfBooks();
+    }
+
+    @GetMapping("/paused")
+    public List<Book> getPausedBooks() {
+        return bookService.getPausedBooks();
+    }
+
+    @GetMapping("/favorites")
+    public List<Book> getFavoriteBooks() {
+        return bookService.getFavoriteBooks();
+    }
+
+    @GetMapping("/owned")
+    public List<Book> getOwnedBooks() {
+        return bookService.getOwnedBooks();
     }
 }
