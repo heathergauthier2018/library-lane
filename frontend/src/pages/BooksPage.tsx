@@ -5,6 +5,7 @@ import bookshelfBackground from "../assets/storybook/backgrounds/bookshelf-backg
 import AddBookModal from "../components/books/AddBookModal";
 import BookDetailsModal from "../components/books/BookDetailsModal";
 import type { NewBook } from "../components/books/AddBookModal";
+import { bookApi } from "../api/libraryLaneApi";
 
 type BooksPageProps = {
   currentPage: AppPage;
@@ -423,7 +424,7 @@ export default function BooksPage({
   openAddBookOnLoad = false,
   onAddBookOpened,
 }: BooksPageProps) {
-  const [books, setBooks] = useState<ShelfBook[]>(loadSavedBooks);
+  const [books, setBooks] = useState<ShelfBook[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [addBookOpen, setAddBookOpen] = useState(false);
   const [selectedBook, setSelectedBook] = useState<ShelfBook | null>(null);
@@ -437,17 +438,30 @@ export default function BooksPage({
   const [romanceFilter, setRomanceFilter] = useState("ALL");
   const [seriesFilter, setSeriesFilter] = useState("ALL");
   const [specialFilter, setSpecialFilter] = useState("ALL");
-  const [atmosphereFilter, setAtmosphereFilter] = useState("ALL");
-  const [genreFilter, setGenreFilter] = useState("ALL");
+const [atmosphereFilter, setAtmosphereFilter] = useState("ALL");
+const [genreFilter, setGenreFilter] = useState("ALL");
 
-  useEffect(() => {
-    if (openAddBookOnLoad) {
-      window.scrollTo({ top: 0, behavior: "auto" });
-      setAddBookOpen(true);
-      onAddBookOpened?.();
+useEffect(() => {
+  async function loadBooksFromApi() {
+    try {
+      const apiBooks = await bookApi.getAll();
+      setBooks((apiBooks as Partial<ShelfBook>[]).map(migrateBook));
+    } catch (error) {
+      console.error("Failed to load books from API", error);
+      setBooks(loadSavedBooks());
     }
-  }, [openAddBookOnLoad, onAddBookOpened]);
+  }
 
+  loadBooksFromApi();
+}, []);
+
+useEffect(() => {
+  if (openAddBookOnLoad) {
+    window.scrollTo({ top: 0, behavior: "auto" });
+    setAddBookOpen(true);
+    onAddBookOpened?.();
+  }
+}, [openAddBookOnLoad, onAddBookOpened]);
   useEffect(() => {
     setCurrentBookcasePage(0);
   }, [
