@@ -1,5 +1,7 @@
 package com.librarylane.entities;
 
+import com.fasterxml.jackson.annotation.JsonManagedReference;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.librarylane.enums.BookFormat;
 import com.librarylane.enums.ReadingExperienceType;
 import com.librarylane.enums.ReadingStatus;
@@ -10,8 +12,6 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Set;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonManagedReference;
 
 @Entity
 @Table(name = "reading_experiences")
@@ -27,6 +27,8 @@ public class ReadingExperience {
     private Long id;
 
     private Integer experienceNumber;
+
+    private String label;
 
     @Enumerated(EnumType.STRING)
     private ReadingExperienceType experienceType;
@@ -55,11 +57,40 @@ public class ReadingExperience {
 
     private Double rating;
 
+    private String predictedRating;
+    private String currentRating;
+    private String initialRating;
+    private String finalRating;
+    private String rereadRating;
+    private String emotionalDevastationRating;
+
+    private String excitementRating;
+    private String currentExcitementRating;
+    private String excitementWhileReading;
+
+    private String romancePresence;
+    private String romanceImportance;
+    private String romanceRating;
+    private String spiceRating;
+
+    private String horrorRating;
+
+    @Column(length = 5000)
+    private String romanceNotes;
+
     @Column(length = 5000)
     private String reviewText;
 
     @Column(length = 2000)
     private String dnfReason;
+
+    /**
+     * Stores every expandable prompt answer in JSON.
+     * This allows Library Lane to add or remove prompts
+     * without changing the database schema.
+     */
+    @Column(columnDefinition = "TEXT")
+    private String promptResponsesJson;
 
     private Boolean currentExperience = false;
 

@@ -37,34 +37,26 @@ public class Book {
     private String description;
 
     private String isbn10;
-
     private String isbn13;
-
     private String publisher;
-
     private LocalDate publicationDate;
-
     private Integer pageCount;
-
     private Integer audiobookLengthSeconds;
-
     private String coverImageUrl;
-
     private String language;
-
     private String seriesName;
-
     private Double seriesNumber;
+    private String editionFormat;
+    private String narrator;
+    private String catalogProvider;
+    private String catalogProviderId;
 
     @Column(length = 5000)
     private String personalNotes;
 
     private Boolean favorite;
-
     private Boolean owned;
-
     private Boolean wishlist;
-
     private Boolean dnf;
 
     @Enumerated(EnumType.STRING)
@@ -99,13 +91,32 @@ public class Book {
 
     @OneToMany(mappedBy = "book", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
-    @JsonIgnore
     private Set<ReadingExperience> readingExperiences = new HashSet<>();
 
     @OneToMany(mappedBy = "book", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
     @JsonIgnore
     private Set<Quote> quotes = new HashSet<>();
+
+    @OneToMany(mappedBy = "book", cascade = CascadeType.ALL, orphanRemoval = true)
+    @Builder.Default
+    @JsonIgnore
+    private Set<MusicAssociation> musicAssociations = new HashSet<>();
+
+    @OneToMany(mappedBy = "book", cascade = CascadeType.ALL, orphanRemoval = true)
+    @Builder.Default
+    @JsonIgnore
+    private Set<BookCharacter> characters = new HashSet<>();
+
+    @OneToMany(mappedBy = "book", cascade = CascadeType.ALL, orphanRemoval = true)
+    @Builder.Default
+    @JsonIgnore
+    private Set<BookLocation> locations = new HashSet<>();
+
+    @OneToMany(mappedBy = "book", cascade = CascadeType.ALL, orphanRemoval = true)
+    @Builder.Default
+    @JsonIgnore
+    private Set<BookTimelineEvent> timelineEvents = new HashSet<>();
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
@@ -117,24 +128,12 @@ public class Book {
 
     @PrePersist
     protected void onCreate() {
-        if (dateAdded == null) {
-            dateAdded = LocalDate.now();
-        }
-
-        if (favorite == null) {
-            favorite = false;
-        }
-
-        if (owned == null) {
-            owned = true;
-        }
-
-        if (wishlist == null) {
-            wishlist = false;
-        }
-
-        if (dnf == null) {
-            dnf = false;
-        }
+        if (dateAdded == null) dateAdded = LocalDate.now();
+        if (favorite == null) favorite = false;
+        if (owned == null) owned = true;
+        if (wishlist == null) wishlist = false;
+        if (dnf == null) dnf = false;
+        if (primaryFormat == null) primaryFormat = BookFormat.PHYSICAL_BOOK;
+        if (currentStatus == null) currentStatus = ReadingStatus.TBR;
     }
 }

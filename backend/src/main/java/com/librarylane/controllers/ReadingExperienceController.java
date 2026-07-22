@@ -2,6 +2,8 @@ package com.librarylane.controllers;
 
 import com.librarylane.entities.ReadingExperience;
 import com.librarylane.services.ReadingExperienceService;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -13,7 +15,8 @@ public class ReadingExperienceController {
 
     private final ReadingExperienceService readingExperienceService;
 
-    public ReadingExperienceController(ReadingExperienceService readingExperienceService) {
+    public ReadingExperienceController(
+            ReadingExperienceService readingExperienceService) {
         this.readingExperienceService = readingExperienceService;
     }
 
@@ -28,18 +31,23 @@ public class ReadingExperienceController {
     }
 
     @GetMapping("/book/{bookId}")
-    public List<ReadingExperience> getReadingExperiencesByBookId(@PathVariable Long bookId) {
+    public List<ReadingExperience> getReadingExperiencesByBookId(
+            @PathVariable Long bookId) {
         return readingExperienceService.getReadingExperiencesByBookId(bookId);
     }
 
     @GetMapping("/book/{bookId}/current")
-    public ReadingExperience getCurrentReadingExperienceForBook(@PathVariable Long bookId) {
+    public ReadingExperience getCurrentReadingExperienceForBook(
+            @PathVariable Long bookId) {
         return readingExperienceService.getCurrentReadingExperienceForBook(bookId);
     }
 
     @PostMapping
-    public ReadingExperience createReadingExperience(@RequestBody ReadingExperience readingExperience) {
-        return readingExperienceService.createReadingExperience(readingExperience);
+    public ResponseEntity<ReadingExperience> createReadingExperience(
+            @RequestBody ReadingExperience readingExperience) {
+        ReadingExperience saved =
+                readingExperienceService.createReadingExperience(readingExperience);
+        return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 
     @PutMapping("/{id}")
@@ -50,7 +58,8 @@ public class ReadingExperienceController {
     }
 
     @DeleteMapping("/{id}")
-    public void deleteReadingExperience(@PathVariable Long id) {
+    public ResponseEntity<Void> deleteReadingExperience(@PathVariable Long id) {
         readingExperienceService.deleteReadingExperience(id);
+        return ResponseEntity.noContent().build();
     }
 }

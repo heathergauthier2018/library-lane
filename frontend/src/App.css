@@ -1,6 +1,7 @@
 @import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600;1,700&display=swap");
 @import url("https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800;900&display=swap");
 @import url("https://fonts.googleapis.com/css2?family=Cedarville+Cursive&family=La+Belle+Aurore&family=Caveat&family=Shadows+Into+Light&family=Nothing+You+Could+Do&family=Sue+Ellen+Francisco&family=Reenie+Beanie&family=Kalam&family=Architects+Daughter&family=Handlee&family=Ballet:opsz@16..72&family=Tangerine:wght@400;700&family=Marck+Script&family=Qwigley&family=Pinyon+Script&family=IM+Fell+English+SC&family=MedievalSharp&family=Parisienne&display=swap");
+/* LIBRARY LANE LIVING QUILL — NIB-CALIBRATED REVISION 4 (2026-07-19) */
 @font-face {
   font-family: "Aquiline Two";
   src: url("./assets/fonts/aquiline_two/AquilineTwo.ttf")
@@ -1689,6 +1690,14 @@ height: 100%;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
 }
 
+.books-layout > .books-menu-button {
+  top: 108px;
+  left: 62px;
+  width: 42px;
+  height: 42px;
+  font-size: 21px;
+}
+
 .books-sidebar-backdrop {
   position: fixed;
   inset: 0;
@@ -2210,8 +2219,7 @@ height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 0 8px 24px 0;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(90, 58, 28, 0.16) transparent;
+  scrollbar-width: none;
 }
 
 .add-book-left-page {
@@ -2226,7 +2234,9 @@ height: 100%;
 
 .add-book-page::-webkit-scrollbar,
 .add-book-page textarea::-webkit-scrollbar {
-  width: 4px;
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .add-book-page::-webkit-scrollbar-track,
@@ -2293,8 +2303,8 @@ height: 100%;
   background: transparent;
   color: #2a1208;
   padding: 3px 5px;
-  font-family: "Handlee", cursive;
-  font-size: 17.5px;
+  font-family: var(--reader-handwriting-font, "Cedarville Cursive", cursive);
+  font-size: var(--reader-handwriting-size, 20px);
   font-weight: 400;
   line-height: 1.14;
   outline: none;
@@ -2305,21 +2315,558 @@ height: 100%;
   resize: none;
   min-height: 39px;
   max-height: 70px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(90, 58, 28, 0.12) transparent;
+  scrollbar-width: none;
 }
 
 .add-book-page input::placeholder,
 .add-book-page textarea::placeholder {
   color: rgba(52, 36, 24, 0.48);
-  font-family: "Handlee", cursive;
-  font-size: 17px;
+  font-family: var(--reader-handwriting-font, "Cedarville Cursive", cursive);
+  font-size: var(--reader-handwriting-size, 20px);
   font-weight: 400;
 }
 
 .add-book-page input:focus,
 .add-book-page textarea:focus {
   box-shadow: none;
+}
+
+/* The active quill follows the real caret rather than replacing it. */
+.ledger-quill-input-shell {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: visible;
+}
+
+.ledger-quill-input-shell input {
+  position: relative;
+  z-index: 1;
+}
+
+.ledger-caret-quill {
+  position: absolute;
+  z-index: 3;
+  top: var(--quill-caret-y, 18px);
+  left: var(--quill-caret-x, 5px);
+  width: 148px;
+  max-width: none;
+  height: auto;
+  opacity: 1;
+  object-fit: contain;
+  image-rendering: auto;
+  pointer-events: none;
+  /* The uploaded asset's nib is at x=1161/1586, y=942/992. */
+  transform-origin: 73.2% 95%;
+  transform: translate(-73.2%, -95%) scaleX(-1) rotate(6deg);
+  filter:
+    contrast(1.06)
+    saturate(1.08)
+    drop-shadow(0 1px 1px rgba(67, 34, 8, 0.42));
+  transition: opacity 120ms ease;
+}
+
+.ledger-caret-quill.is-writing,
+.dropdown-writing-quill.is-writing {
+  animation: ledger-quill-writing-stroke 240ms cubic-bezier(0.32, 0.02, 0.2, 1)
+    infinite;
+}
+
+@keyframes ledger-quill-writing-stroke {
+  0% {
+    transform: translate(-73.2%, -95%) translateY(-15px) scaleX(-1)
+      rotate(12deg);
+  }
+  34% {
+    transform: translate(-73.2%, -95%) translateY(9px) scaleX(-1)
+      rotate(1deg);
+  }
+  62% {
+    transform: translate(-73.2%, -95%) translateY(-10px) scaleX(-1)
+      rotate(9deg);
+  }
+  82% {
+    transform: translate(-73.2%, -95%) translateY(5px) scaleX(-1)
+      rotate(3deg);
+  }
+  100% {
+    transform: translate(-73.2%, -95%) translateY(0) scaleX(-1)
+      rotate(6deg);
+  }
+}
+
+.ledger-quill-textarea-shell {
+  height: auto;
+}
+
+.ledger-quill-textarea-shell textarea {
+  position: relative;
+  z-index: 1;
+}
+
+.focused-writing-right > .ledger-quill-textarea-shell {
+  width: 100%;
+  height: 100%;
+}
+
+/* EDITION-AWARE CATALOG RESULTS */
+
+.ledger-input-field {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+
+.ledger-input-field > label {
+  margin-bottom: 0;
+}
+
+.catalog-search-field {
+  position: relative;
+  z-index: 1;
+}
+
+.catalog-search-field-active {
+  z-index: 500;
+}
+
+.catalog-search-panel {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  z-index: 501;
+  width: 100%;
+  max-height: 326px;
+  padding: 10px 11px 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 0;
+  border-radius: 10px;
+  background-color: #f2d9a4;
+  background-image:
+    radial-gradient(circle at 14% 18%, rgba(255, 250, 218, 0.68), transparent 28%),
+    radial-gradient(circle at 88% 80%, rgba(151, 94, 30, 0.12), transparent 36%),
+    repeating-linear-gradient(
+      2deg,
+      rgba(93, 55, 18, 0.018) 0,
+      rgba(93, 55, 18, 0.018) 1px,
+      transparent 1px,
+      transparent 4px
+    ),
+    linear-gradient(150deg, #fff1c8 0%, #f3dca9 53%, #e9c989 100%);
+  opacity: 1;
+  color: #2a1208;
+  box-shadow:
+    0 21px 38px rgba(0, 0, 0, 0.42),
+    0 5px 10px rgba(54, 29, 8, 0.13),
+    inset 0 0 28px rgba(110, 62, 16, 0.1);
+  scrollbar-width: none;
+  isolation: isolate;
+  animation: catalog-card-arrive 160ms ease-out;
+}
+
+.catalog-slip-ornament {
+  display: grid;
+  grid-template-columns: minmax(18px, 1fr) auto minmax(18px, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 22px);
+  margin-inline: auto;
+  color: rgba(139, 88, 28, 0.58);
+  pointer-events: none;
+}
+
+.catalog-slip-ornament::before,
+.catalog-slip-ornament::after {
+  content: "";
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(136, 84, 27, 0.38)
+  );
+}
+
+.catalog-slip-ornament::after {
+  transform: scaleX(-1);
+}
+
+.catalog-slip-ornament span {
+  font-size: 8px;
+  line-height: 1;
+  text-shadow: 0 0 5px rgba(181, 116, 27, 0.28);
+}
+
+.catalog-slip-ornament-top {
+  margin-top: 1px;
+  margin-bottom: 7px;
+}
+
+.catalog-slip-ornament-bottom {
+  width: min(170px, 52%);
+  margin-top: 8px;
+  margin-bottom: 1px;
+  opacity: 0.64;
+}
+
+.catalog-search-panel::before,
+.catalog-search-panel::after {
+  content: "";
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  display: block;
+  height: 7px;
+  margin: -10px -11px 0;
+  pointer-events: none;
+}
+
+.catalog-search-panel::before {
+  top: -10px;
+  background: linear-gradient(to bottom, rgba(246, 223, 174, 0.95), transparent);
+}
+
+.catalog-search-panel::after {
+  bottom: -12px;
+  margin-top: -7px;
+  background: linear-gradient(to top, rgba(226, 190, 125, 0.96), transparent);
+}
+
+@keyframes catalog-card-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.catalog-search-panel::-webkit-scrollbar,
+.fantasy-dropdown-menu::-webkit-scrollbar,
+.focused-writing-area::-webkit-scrollbar,
+.story-record-page::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.catalog-search-panel,
+.fantasy-dropdown-menu,
+.focused-writing-area,
+.story-record-page {
+  scrollbar-width: none;
+}
+
+/* The publisher description has room to breathe on the first spread. */
+.ledger-field-description textarea {
+  height: 105px !important;
+  min-height: 105px !important;
+  max-height: 105px !important;
+  line-height: 1.28;
+  overflow-y: auto;
+}
+
+.catalog-search-state {
+  min-height: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 13px 18px 12px;
+  text-align: center;
+}
+
+/* Loading and empty messages appear as enchanted ink on the open page,
+   without the large catalog-card rectangle used for actual results. */
+.catalog-search-panel-message {
+  top: calc(100% + 2px);
+  min-height: 0;
+  padding: 4px 8px 7px;
+  overflow: visible;
+  border-radius: 0;
+  background:
+    radial-gradient(
+      ellipse at center,
+      rgba(248, 226, 181, 0.52) 0%,
+      rgba(246, 222, 176, 0.28) 56%,
+      transparent 88%
+    );
+  box-shadow: none;
+  isolation: auto;
+}
+
+.catalog-search-panel-message::before,
+.catalog-search-panel-message::after,
+.catalog-search-panel-message > .catalog-slip-ornament {
+  display: none;
+}
+
+.catalog-search-panel-message .catalog-search-state {
+  min-height: 58px;
+  gap: 3px;
+  padding: 6px 14px;
+}
+
+.catalog-search-panel-message .catalog-search-state::before,
+.catalog-search-panel-message .catalog-search-state::after {
+  width: min(142px, 54%);
+  opacity: 0.44;
+}
+
+.catalog-search-state::before,
+.catalog-search-state::after {
+  content: "";
+  width: min(210px, 76%);
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(139, 89, 30, 0.48),
+    transparent
+  );
+}
+
+.catalog-state-ornament {
+  color: #a97627;
+  font-size: 11px;
+  line-height: 1;
+  text-shadow: 0 0 7px rgba(197, 133, 34, 0.52);
+}
+
+.catalog-search-state p {
+  max-width: 310px;
+  margin: 0;
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: 16px;
+  font-style: italic;
+  font-weight: 700;
+  line-height: 1.18;
+  color: #4b2b13;
+}
+
+.catalog-search-state small {
+  font-family: "Cinzel", Georgia, serif;
+  font-size: 8.5px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #875b25;
+}
+
+.catalog-search-dots {
+  display: flex;
+  gap: 6px;
+  height: 9px;
+  align-items: center;
+}
+
+.catalog-search-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #b7822f;
+  box-shadow: 0 0 7px rgba(190, 126, 30, 0.72);
+  animation: catalog-dot-glow 1.15s ease-in-out infinite;
+}
+
+.catalog-search-dots i:nth-child(2) {
+  animation-delay: 140ms;
+}
+
+.catalog-search-dots i:nth-child(3) {
+  animation-delay: 280ms;
+}
+
+@keyframes catalog-dot-glow {
+  0%, 70%, 100% {
+    opacity: 0.28;
+    transform: scale(0.78);
+  }
+  35% {
+    opacity: 1;
+    transform: scale(1.22);
+  }
+}
+
+.catalog-results-heading {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 2px 6px 5px;
+  padding: 2px 4px 7px;
+  border-bottom: 1px solid rgba(131, 83, 28, 0.32);
+  color: #71471d;
+}
+
+.catalog-results-heading span {
+  font-family: "Cinzel", Georgia, serif;
+  font-size: 8.5px;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.catalog-results-heading small {
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: 12px;
+  font-style: italic;
+  color: rgba(79, 44, 16, 0.72);
+}
+
+.catalog-search-result {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 0;
+  border-bottom: 1px solid rgba(121, 84, 44, 0.18);
+  border-radius: 0;
+  background: transparent;
+  color: #2a1208;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.catalog-search-result:hover,
+.catalog-search-result:focus-visible {
+  outline: 0;
+  transform: translateX(2px);
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgba(203, 148, 54, 0.12) 13%,
+    rgba(255, 243, 203, 0.2) 70%,
+    transparent
+  );
+}
+
+.catalog-cover-frame {
+  position: relative;
+  width: 46px;
+  height: 66px;
+  display: grid;
+  place-items: center;
+  padding: 2px;
+  border: 1px solid rgba(137, 89, 31, 0.65);
+  border-radius: 4px;
+  background: linear-gradient(145deg, #d5aa59, #7c4c1f 48%, #e3bd6c);
+  box-shadow:
+    0 5px 10px rgba(42, 18, 8, 0.28),
+    inset 0 0 0 1px rgba(255, 226, 150, 0.5);
+}
+
+.catalog-cover-frame img,
+.catalog-cover-frame .catalog-cover-placeholder {
+  width: 42px;
+  height: 62px;
+  display: block;
+  border-radius: 2px;
+  object-fit: cover;
+  background: linear-gradient(135deg, #263d59, #111928);
+}
+
+.catalog-cover-placeholder::before {
+  content: "✦";
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: rgba(224, 183, 94, 0.7);
+  font-family: Georgia, serif;
+  font-size: 13px;
+}
+
+.catalog-result-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  font-family: "Cormorant Garamond", Georgia, serif;
+}
+
+.catalog-result-copy strong {
+  overflow: hidden;
+  font-size: 17.5px;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #351907;
+}
+
+.catalog-result-copy > span {
+  overflow: hidden;
+  font-size: 14.2px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #5b3418;
+}
+
+.catalog-result-copy small {
+  overflow: hidden;
+  font-size: 12.7px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(80, 46, 20, 0.78);
+}
+
+.catalog-result-copy em {
+  position: relative;
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(112, 67, 24, 0.82);
+  font-family: "Cinzel", Georgia, serif;
+  font-size: 7.8px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  text-shadow: 0.3px 0 rgba(91, 50, 15, 0.25);
+}
+
+.catalog-result-copy em::before {
+  content: "◆";
+  color: rgba(148, 91, 27, 0.65);
+  font-size: 5px;
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .catalog-search-panel,
+  .catalog-search-dots i,
+  .catalog-search-result,
+  .ledger-caret-quill,
+  .fantasy-dropdown-menu,
+  .quill-option-pointer,
+  .dropdown-writing-quill {
+    animation: none;
+    transition: none;
+  }
+
+  .ledger-caret-quill,
+  .quill-option-pointer,
+  .dropdown-writing-quill {
+    display: none;
+  }
 }
 
 /* LONG PROMPTS */
@@ -2361,17 +2908,25 @@ height: 100%;
 }
 
 .fantasy-dropdown-button {
+  position: relative;
   width: 100%;
   border: 0;
   background: transparent;
   color: #2a1208;
   padding: 3px 5px;
   text-align: left;
-  font-family: "Cormorant Garamond", Georgia, serif;
-  font-size: 15.8px;
-  font-style: italic;
-  font-weight: 700;
+  font-family: var(--reader-handwriting-font, "Cedarville Cursive", cursive);
+  font-size: var(--reader-handwriting-size, 20px);
+  font-style: normal;
+  font-weight: 400;
   cursor: pointer;
+}
+
+.fantasy-dropdown-display {
+  position: relative;
+  display: inline-block;
+  min-height: 1em;
+  white-space: nowrap;
 }
 
 .fantasy-dropdown-arrow {
@@ -2381,38 +2936,139 @@ height: 100%;
 
 .fantasy-dropdown-menu {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 1px);
   left: 0;
-  width: 100%;
   z-index: 100;
-  padding: 7px;
-  background: rgba(243, 223, 188, 0.98);
-  border: 1px solid rgba(121, 84, 44, 0.4);
-  border-radius: 8px;
-  backdrop-filter: blur(6px);
-  box-shadow:
-    0 10px 22px rgba(0, 0, 0, 0.18),
-    inset 0 0 12px rgba(255, 255, 255, 0.25);
+  width: min(292px, 78%);
+  min-width: 226px;
+  padding: 7px 8px 8px;
+  overflow: visible;
+  border: 0;
+  border-radius: 17px 10px 19px 12px / 11px 18px 12px 17px;
+  background: rgba(246, 224, 180, 0.9);
+  box-shadow: 0 10px 20px rgba(57, 31, 9, 0.18);
+  animation: quill-options-reveal 170ms ease-out;
+}
+
+.fantasy-dropdown-menu::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -4px -5px;
+  border-radius: 22px 13px 24px 16px / 15px 23px 16px 21px;
+  background:
+    radial-gradient(circle at 18% 16%, rgba(255, 248, 221, 0.74), transparent 35%),
+    linear-gradient(145deg, rgba(249, 230, 190, 0.72), rgba(232, 194, 132, 0.46));
+  filter: blur(4px);
+  opacity: 0.76;
+  pointer-events: none;
 }
 
 .fantasy-dropdown-menu button {
+  position: relative;
   width: 100%;
+  min-height: 39px;
+  padding: 3px 10px 3px 78px;
   border: 0;
   background: transparent;
-  padding: 6px 8px;
+  color: rgba(42, 18, 8, 0.8);
   text-align: left;
-  color: #2a1208;
-  font-family: "Cormorant Garamond", Georgia, serif;
-  font-size: 15.8px;
-  font-style: italic;
-  font-weight: 700;
+  font-family: var(--reader-handwriting-font, "Cedarville Cursive", cursive);
+  font-size: var(--reader-handwriting-size, 20px);
+  font-style: normal;
+  font-weight: 400;
   cursor: pointer;
+  transition:
+    color 120ms ease,
+    text-shadow 120ms ease,
+    transform 120ms ease;
 }
 
 .fantasy-dropdown-menu button:hover,
+.fantasy-dropdown-menu button:focus-visible,
 .fantasy-dropdown-menu button.selected {
-  background: rgba(127, 85, 40, 0.14);
-  border-radius: 6px;
+  outline: 0;
+  color: #351705;
+  background: transparent;
+  text-shadow: 0 0 7px rgba(192, 126, 33, 0.24);
+  transform: translateX(2px);
+}
+
+.quill-option-pointer {
+  position: absolute;
+  z-index: 2;
+  top: var(--quill-option-y, 24px);
+  left: 69px;
+  width: 128px;
+  max-width: none;
+  height: auto;
+  opacity: 1;
+  object-fit: contain;
+  image-rendering: auto;
+  pointer-events: none;
+  transform-origin: 73.2% 95%;
+  transform: translate(-73.2%, -95%) rotate(-7deg);
+  filter:
+    contrast(1.06)
+    saturate(1.08)
+    drop-shadow(0 1px 1px rgba(65, 32, 7, 0.38));
+  transition: top 165ms cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+
+.dropdown-writing-quill {
+  position: absolute;
+  z-index: 3;
+  top: var(--quill-writing-y, 64%);
+  left: var(--quill-writing-x, 5px);
+  width: 148px;
+  max-width: none;
+  height: auto;
+  opacity: 1;
+  object-fit: contain;
+  image-rendering: auto;
+  pointer-events: none;
+  transform-origin: 73.2% 95%;
+  transform: translate(-73.2%, -95%) scaleX(-1) rotate(6deg);
+  filter:
+    contrast(1.06)
+    saturate(1.08)
+    drop-shadow(0 1px 1px rgba(65, 32, 7, 0.4));
+}
+
+.quill-phase-turning .dropdown-writing-quill {
+  animation: quill-turn-to-write 190ms ease-in-out both;
+}
+
+.quill-phase-writing .dropdown-writing-quill {
+  animation: ledger-quill-writing-stroke 240ms cubic-bezier(0.32, 0.02, 0.2, 1)
+    infinite;
+}
+
+.quill-writing-selection .fantasy-dropdown-arrow {
+  opacity: 0;
+}
+
+@keyframes quill-options-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes quill-turn-to-write {
+  0% {
+    transform: translate(-73.2%, -95%) scaleX(1) rotate(-7deg);
+  }
+  48% {
+    transform: translate(-73.2%, -95%) scaleX(0.05) rotate(-13deg);
+  }
+  100% {
+    transform: translate(-73.2%, -95%) scaleX(-1) rotate(6deg);
+  }
 }
 
 /* ICON RATINGS */
@@ -2426,6 +3082,431 @@ height: 100%;
   align-items: center;
   gap: 8px;
   min-height: 66px;
+}
+
+/* ========================================================================== */
+/* LIBRARY LANE ENCHANTED INDEX + TRUE FEATHER QUILL — 2026-07-19             */
+/* ========================================================================== */
+
+/* The new transparent asset ends in a real split nib at roughly 97% / 56%. */
+.ledger-caret-quill,
+.dropdown-writing-quill {
+  width: 150px;
+  transform-origin: 97% 56%;
+  /* Flip around the nib so the feather rises to the upper-right, as it would
+     in a right-handed writer's hand. The nib itself remains on the caret. */
+  transform: translate(-97%, -56%) rotate(-24deg) scaleX(-1);
+  filter:
+    contrast(1.04)
+    saturate(1.04)
+    drop-shadow(0 1px 1px rgba(67, 34, 8, 0.4));
+}
+
+.ledger-caret-quill.is-writing,
+.dropdown-writing-quill.is-writing {
+  animation-duration: 310ms;
+}
+
+/* Keep the writing quill's nib on the caret while turning the feather inward
+   only when the caret reaches the page edge. */
+.ledger-caret-quill.is-near-right-edge {
+  transform: translate(-97%, -56%) rotate(23deg);
+}
+
+/* The free-writing quill moves a touch more slowly and lifts slightly higher. */
+.ledger-caret-quill.is-writing {
+  animation: ledger-caret-quill-writing-stroke 390ms
+    cubic-bezier(0.32, 0.02, 0.2, 1) infinite;
+}
+
+/* Dropdown selections use the exact proven stroke used while typing. The
+   more specific selector intentionally wins over the older dropdown rule
+   earlier in this stylesheet. */
+.fantasy-dropdown-button.quill-phase-writing
+  .dropdown-writing-quill.is-writing {
+  animation: ledger-caret-quill-writing-stroke 390ms
+    cubic-bezier(0.32, 0.02, 0.2, 1) infinite;
+}
+
+.ledger-caret-quill.is-near-right-edge.is-writing {
+  animation-name: ledger-caret-quill-writing-stroke-inward;
+}
+
+@keyframes ledger-caret-quill-writing-stroke {
+  0% {
+    transform: translate(-97%, -56%) translateY(-15px) rotate(-29deg) scaleX(-1);
+  }
+  34% {
+    transform: translate(-97%, -56%) translateY(5px) rotate(-20deg) scaleX(-1);
+  }
+  64% {
+    transform: translate(-97%, -56%) translateY(-11px) rotate(-27deg) scaleX(-1);
+  }
+  84% {
+    transform: translate(-97%, -56%) translateY(5px) rotate(-20deg) scaleX(-1);
+  }
+  100% {
+    transform: translate(-97%, -56%) translateY(0) rotate(-24deg) scaleX(-1);
+  }
+}
+
+@keyframes ledger-caret-quill-writing-stroke-inward {
+  0% {
+    transform: translate(-97%, -56%) translateY(-15px) rotate(28deg);
+  }
+  34% {
+    transform: translate(-97%, -56%) translateY(5px) rotate(19deg);
+  }
+  64% {
+    transform: translate(-97%, -56%) translateY(-11px) rotate(26deg);
+  }
+  84% {
+    transform: translate(-97%, -56%) translateY(5px) rotate(20deg);
+  }
+  100% {
+    transform: translate(-97%, -56%) translateY(0) rotate(23deg);
+  }
+}
+
+@keyframes ledger-quill-writing-stroke {
+  0% {
+    transform: translate(-97%, -56%) translateY(-10px) rotate(-29deg) scaleX(-1);
+  }
+  30% {
+    transform: translate(-97%, -56%) translateY(6px) rotate(-20deg) scaleX(-1);
+  }
+  58% {
+    transform: translate(-97%, -56%) translateY(-7px) rotate(-27deg) scaleX(-1);
+  }
+  82% {
+    transform: translate(-97%, -56%) translateY(7px) rotate(-19deg) scaleX(-1);
+  }
+  100% {
+    transform: translate(-97%, -56%) translateY(0) rotate(-24deg) scaleX(-1);
+  }
+}
+
+@keyframes quill-turn-to-write {
+  0% {
+    transform: translate(-97%, -56%) rotate(-8deg) scaleX(-1);
+  }
+  46% {
+    transform: translate(-97%, -56%) rotate(-17deg) scaleX(-1) scaleY(0.12);
+  }
+  100% {
+    transform: translate(-97%, -56%) rotate(-24deg) scaleX(-1);
+  }
+}
+
+/* The open choices use one quiet, opaque parchment slip. It keeps the ledger
+   beneath from showing through without turning each option into a UI card. */
+.fantasy-dropdown-menu {
+  top: calc(100% + 4px);
+  left: 0;
+  width: max-content;
+  min-width: 10rem;
+  max-width: min(17rem, 90vw);
+  max-height: min(310px, 48vh);
+  padding: 8px 10px 9px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid rgba(126, 77, 25, 0.22);
+  border-radius: 4px 7px 5px 3px / 5px 4px 7px 4px;
+  background-color: #f4dda9;
+  background-image:
+    radial-gradient(circle at 18% 12%, rgba(255, 249, 219, 0.82), transparent 32%),
+    radial-gradient(circle at 88% 84%, rgba(145, 87, 25, 0.09), transparent 34%),
+    linear-gradient(150deg, #fff0c4 0%, #f4dda9 56%, #ebcb8d 100%);
+  box-shadow:
+    0 14px 24px rgba(42, 22, 6, 0.28),
+    0 3px 7px rgba(72, 40, 11, 0.12),
+    inset 0 0 18px rgba(109, 61, 16, 0.07);
+  isolation: isolate;
+}
+
+.fantasy-dropdown-menu::before {
+  display: block;
+  inset: 4px;
+  border: 1px solid rgba(130, 80, 27, 0.1);
+  border-radius: 2px 5px 3px 2px / 4px 2px 5px 3px;
+  background: transparent;
+  filter: none;
+  opacity: 1;
+}
+
+.fantasy-dropdown-menu button {
+  min-height: 38px;
+  padding: 4px 12px;
+  overflow: visible;
+  border-bottom: 1px solid rgba(116, 72, 27, 0.12);
+  color: rgba(42, 18, 8, 0.76);
+  line-height: 1.15;
+  white-space: nowrap;
+  transform: none;
+}
+
+.fantasy-dropdown-menu button:last-child {
+  border-bottom: 0;
+}
+
+.fantasy-dropdown-menu button::after {
+  content: none;
+  display: none;
+}
+
+.fantasy-dropdown-menu button:hover,
+.fantasy-dropdown-menu button:focus-visible {
+  color: #351705;
+  background: rgba(113, 66, 19, 0.055);
+  text-shadow: 0 0 7px rgba(192, 126, 33, 0.18);
+  transform: translate(2px, -1px);
+}
+
+.fantasy-dropdown-menu button.selected {
+  color: rgba(42, 18, 8, 0.76);
+  background: transparent;
+  text-shadow: none;
+  transform: none;
+}
+
+.fantasy-dropdown-menu button.selected:hover,
+.fantasy-dropdown-menu button.selected:focus-visible {
+  color: #351705;
+  background: rgba(113, 66, 19, 0.055);
+  text-shadow: 0 0 7px rgba(192, 126, 33, 0.18);
+  transform: translate(2px, -1px);
+}
+
+.quill-option-pointer {
+  display: none;
+}
+
+/* A light archival leaf summoned from the Library Lane card catalog. */
+.catalog-search-panel,
+.catalog-search-panel-message {
+  top: calc(100% + 7px);
+  width: 100%;
+  max-height: 340px;
+  min-height: 0;
+  padding: 10px 12px 11px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid rgba(124, 76, 24, 0.34);
+  border-radius: 2px;
+  clip-path: polygon(
+    0 3px,
+    3px 0,
+    calc(100% - 5px) 0,
+    100% 4px,
+    100% calc(100% - 3px),
+    calc(100% - 4px) 100%,
+    4px 100%,
+    0 calc(100% - 4px)
+  );
+  background-color: #f3dda9;
+  background-image:
+    linear-gradient(rgba(255, 250, 221, 0.3), rgba(239, 207, 145, 0.12)),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 42px,
+      rgba(110, 69, 25, 0.07) 42px,
+      rgba(110, 69, 25, 0.07) 43px
+    ),
+    radial-gradient(circle at 15% 13%, rgba(255, 249, 217, 0.7), transparent 28%),
+    radial-gradient(circle at 88% 84%, rgba(145, 87, 25, 0.1), transparent 34%),
+    linear-gradient(148deg, #fff0c5 0%, #f3dca9 56%, #ebcd91 100%);
+  box-shadow:
+    0 18px 30px rgba(34, 18, 6, 0.34),
+    0 4px 8px rgba(66, 37, 10, 0.16),
+    inset 0 0 24px rgba(109, 61, 16, 0.08);
+  isolation: isolate;
+}
+
+.catalog-search-panel::before,
+.catalog-search-panel-message::before {
+  content: "LL";
+  position: absolute;
+  top: 54%;
+  left: 50%;
+  z-index: -1;
+  display: grid;
+  width: 112px;
+  height: 112px;
+  margin: 0;
+  place-items: center;
+  border: 1px solid rgba(125, 75, 22, 0.1);
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(115, 68, 20, 0.055);
+  font-family: "Cinzel", Georgia, serif;
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  transform: translate(-50%, -50%) rotate(-8deg);
+  pointer-events: none;
+}
+
+.catalog-search-panel::after,
+.catalog-search-panel-message::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  z-index: -1;
+  display: block;
+  height: auto;
+  margin: 0;
+  border: 1px solid rgba(133, 84, 28, 0.12);
+  background: transparent;
+  pointer-events: none;
+}
+
+.catalog-index-masthead {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 4px 7px;
+  padding: 2px 5px 7px;
+  border-bottom: 1px solid rgba(126, 76, 24, 0.38);
+  color: #70441b;
+}
+
+.catalog-index-masthead::after {
+  content: "";
+  position: absolute;
+  bottom: -3px;
+  left: 34%;
+  width: 32%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(161, 103, 30, 0.36), transparent);
+}
+
+.catalog-index-masthead > span {
+  font-family: "Cinzel", Georgia, serif;
+  font-size: 8.5px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.catalog-index-masthead small {
+  min-width: 0;
+  overflow: hidden;
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(80, 45, 16, 0.68);
+}
+
+.catalog-index-masthead b {
+  font-weight: 700;
+}
+
+.catalog-search-state,
+.catalog-search-panel-message .catalog-search-state {
+  min-height: 82px;
+  gap: 4px;
+  padding: 12px 18px 11px;
+}
+
+.catalog-search-state::before,
+.catalog-search-state::after,
+.catalog-search-panel-message .catalog-search-state::before,
+.catalog-search-panel-message .catalog-search-state::after {
+  width: min(175px, 64%);
+  opacity: 0.42;
+}
+
+.catalog-state-ornament {
+  font-size: 15px;
+  color: rgba(148, 91, 27, 0.68);
+  transform: rotate(-7deg);
+}
+
+.catalog-search-state p {
+  font-size: 16.5px;
+}
+
+.catalog-search-state small {
+  max-width: 280px;
+  font-size: 8px;
+  line-height: 1.25;
+}
+
+.catalog-results-heading {
+  margin-top: 3px;
+}
+
+.catalog-search-result {
+  border-radius: 0;
+  background: transparent;
+}
+
+.catalog-search-result:hover,
+.catalog-search-result:focus-visible {
+  outline: 0;
+  transform: translateX(2px);
+  background-color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgba(187, 121, 34, 0.1) 16%,
+    rgba(255, 243, 204, 0.17) 70%,
+    transparent
+  );
+  box-shadow: none;
+}
+
+.catalog-result-copy em::before {
+  content: "✦";
+  font-size: 6px;
+}
+
+.catalog-index-signature {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin: 8px auto 1px;
+  color: rgba(102, 58, 18, 0.54);
+  pointer-events: none;
+}
+
+.catalog-index-signature span {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 1px solid rgba(117, 68, 20, 0.34);
+  border-radius: 50%;
+  font-family: "Cinzel", Georgia, serif;
+  font-size: 6.5px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+}
+
+.catalog-index-signature small {
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: 10px;
+  font-style: italic;
+}
+
+@media (max-width: 760px) {
+  .catalog-index-masthead {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .catalog-search-panel,
+  .catalog-search-panel-message {
+    width: min(100%, 420px);
+  }
 }
 
 .ledger-rating-icons button {
@@ -2523,26 +3604,48 @@ height: 100%;
   font-weight: 700;
   line-height: 1.28;
   color: rgba(42, 18, 8, 0.78);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .focused-writing-right {
+  height: 63.2% !important;
+  max-width: 100%;
+  padding: 0 8px 0 0;
+  box-sizing: border-box;
   overflow: hidden;
 }
 
-.focused-writing-area {
+.add-book-page .focused-writing-area {
+  display: block;
   width: 100%;
   height: 100%;
   min-height: 100%;
   max-height: none;
+  max-width: 100%;
+  box-sizing: border-box;
   border: 0;
   background: transparent;
   resize: none;
   color: #2a1208;
-  padding: 8px 8px 24px;
+  padding: 8px 8px 12px;
   font-family: "Handlee", cursive;
   font-size: 22px;
   line-height: 1.32;
   outline: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  scrollbar-width: none;
+}
+
+.focused-writing-area,
+.focused-writing-area * {
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .add-book-actions-focused {
@@ -3117,7 +4220,16 @@ height: 100%;
 }
 
 .story-title-page .story-title-page-content {
-  transform: translateY(175px) !important;
+  position: absolute;
+  top: 28px;
+  right: 8px;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
 }
 
 .story-overview-author {
@@ -3233,6 +4345,18 @@ height: 100%;
 .ledger-icon-rating-spice .shared-rating-icon,
 .rating-display-spice .shared-rating-icon {
   transform: rotate(12deg);
+}
+
+.ledger-page-number {
+  position: absolute;
+  bottom: 5.5%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: 13px;
+  font-style: italic;
+  color: rgba(80, 48, 20, 0.58);
+  pointer-events: none;
 }
 
 /* DASHBOARD SIDEBAR ALWAYS OPEN */
@@ -3364,4 +4488,556 @@ button.doorway-card {
   .add-book-page textarea {
     font-size: 18px;
   }
+}
+
+/* ==========================================
+   BOOKS — UPPER GALLERY HEADER
+========================================== */
+
+html,
+body,
+#root {
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+#root::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.books-layout,
+.fantasy-dashboard {
+  scrollbar-width: none;
+}
+
+.books-layout::-webkit-scrollbar,
+.fantasy-dashboard::-webkit-scrollbar {
+  display: none;
+}
+
+.books-page {
+  padding: 0;
+  background: #070916;
+}
+
+.books-gallery-header {
+  position: relative;
+  min-height: clamp(440px, 32vw, 570px);
+  padding: 44px clamp(32px, 5.2vw, 90px) clamp(190px, 14vw, 245px);
+  background-color: #08101d;
+  background-repeat: no-repeat;
+  background-position: center top;
+  background-size: calc(100% + 38px) 100%;
+  overflow: visible;
+  isolation: isolate;
+}
+
+.books-gallery-header::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 42%;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(80, 37, 12, 0.08) 50%,
+    rgba(108, 48, 12, 0.2)
+  );
+}
+
+.books-gallery-header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: rgba(10, 31, 55, 0.1);
+  mix-blend-mode: screen;
+}
+
+.books-page-header,
+.books-toolbar,
+.books-filter-bar {
+  position: relative;
+  z-index: 3;
+}
+
+.books-page-header {
+  padding-left: clamp(72px, 6.5vw, 112px);
+  align-items: flex-start;
+}
+
+.books-page-header p {
+  font-size: clamp(12px, 0.95vw, 16px);
+  letter-spacing: 0.24em;
+}
+
+.books-page-header h1 {
+  margin-top: 6px;
+  font-size: clamp(54px, 4.4vw, 76px);
+}
+
+.books-page-header span {
+  margin-top: 10px;
+  font-size: clamp(18px, 1.35vw, 23px);
+}
+
+.books-add-button {
+  width: clamp(120px, 9vw, 148px);
+  min-height: 46px;
+  margin: 12px clamp(76px, 5.5vw, 96px) 0 0;
+  padding: 0 17px;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 116% 206%;
+  color: #f4d98d;
+  font-size: 12px;
+  text-transform: uppercase;
+  filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.28));
+  transition: filter 180ms ease, transform 180ms ease;
+}
+
+.books-add-button:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.14) drop-shadow(0 9px 14px rgba(0, 0, 0, 0.38));
+}
+
+.books-add-button:focus-visible,
+.books-toolbar input:focus-visible,
+.books-toolbar select:focus-visible,
+.books-filter-bar select:focus-visible {
+  outline: 0;
+}
+
+.books-toolbar {
+  margin-top: 18px;
+  padding: 0 clamp(34px, 3vw, 52px) 0 clamp(72px, 6.5vw, 112px);
+  align-items: center;
+  gap: 20px;
+  z-index: 20;
+}
+
+.books-search-frame,
+.books-sort-frame {
+  position: relative;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 112% 204%;
+  filter: drop-shadow(0 7px 10px rgba(0, 0, 0, 0.24));
+}
+
+.books-search-frame {
+  flex: 1;
+  min-width: 0;
+}
+
+.books-sort-frame {
+  flex: 0 0 clamp(220px, 17vw, 280px);
+}
+
+.books-search-icon {
+  flex: 0 0 auto;
+  margin-left: 24px;
+  color: #321a0d;
+  font-family: Georgia, serif;
+  font-size: 23px;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
+.books-toolbar input,
+.books-toolbar select {
+  width: 100%;
+  height: 40px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #321a0d;
+  font-size: 15px;
+}
+
+.books-toolbar input {
+  min-width: 0;
+  padding: 0 26px 0 13px;
+}
+
+.books-search-frame:focus-within,
+.books-sort-frame:focus-within {
+  filter: brightness(1.035)
+    drop-shadow(0 0 7px rgba(229, 185, 88, 0.42))
+    drop-shadow(0 7px 10px rgba(0, 0, 0, 0.24));
+}
+
+.books-toolbar select {
+  padding: 0 34px 0 25px;
+  cursor: pointer;
+}
+
+.books-filter-bar {
+  margin: 7px 0 0;
+  padding: 0 clamp(34px, 3vw, 52px) 0 clamp(72px, 6.5vw, 112px);
+  display: grid;
+  grid-template-columns: repeat(8, minmax(112px, 1fr));
+  gap: 5px;
+  z-index: 10;
+}
+
+.books-filter-bar select {
+  width: 100%;
+  min-width: 0;
+  height: 52px;
+  padding: 0 27px 0 16px;
+  border: 0;
+  border-radius: 0;
+  appearance: auto;
+  background-color: transparent;
+  background-image: var(--books-filter-frame);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 123% 300%;
+  color: #321a0d;
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: clamp(12px, 0.9vw, 16px);
+  font-weight: 700;
+  cursor: pointer;
+  filter: drop-shadow(0 5px 7px rgba(0, 0, 0, 0.2));
+}
+
+/* CUSTOM LIBRARY CATALOG DROPDOWNS */
+
+.library-select {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  font-family: "Cormorant Garamond", Georgia, serif;
+}
+
+.library-select.is-open {
+  z-index: 200;
+}
+
+.books-sort-frame .library-select {
+  width: 100%;
+  height: 100%;
+}
+
+.library-select-trigger {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 19px;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: transparent;
+  color: #321a0d;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.library-select-trigger > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-select-chevron {
+  flex: 0 0 auto;
+  color: #6e451e;
+  font-family: Georgia, serif;
+  font-size: 18px;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+.library-select.is-open .library-select-chevron {
+  transform: rotate(180deg);
+}
+
+.library-select-trigger:focus-visible {
+  outline: 0;
+}
+
+.library-select-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 4px;
+  z-index: 100;
+  width: max(100%, 210px);
+  max-height: 318px;
+  padding: 7px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  border: 1px solid #9b6a2c;
+  border-radius: 9px;
+  outline: 1px solid rgba(240, 205, 124, 0.45);
+  outline-offset: -4px;
+  background:
+    linear-gradient(rgba(255, 248, 222, 0.92), rgba(239, 214, 162, 0.96)),
+    radial-gradient(circle at 30% 20%, #fff8df, #e9c989);
+  box-shadow:
+    0 16px 30px rgba(0, 0, 0, 0.48),
+    inset 0 0 18px rgba(114, 66, 17, 0.13);
+  scrollbar-width: none;
+}
+
+.library-select-menu::-webkit-scrollbar {
+  display: none;
+}
+
+.books-sort-select .library-select-menu {
+  right: 3px;
+  left: auto;
+  width: max(100%, 265px);
+}
+
+.library-select-group {
+  margin: 5px 8px 3px;
+  padding: 5px 6px 3px;
+  border-bottom: 1px solid rgba(133, 86, 31, 0.28);
+  color: #8a5d25;
+  font-family: "Cinzel", Georgia, serif;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.library-select-menu button {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #3f210f;
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: 15px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.library-select-menu button:hover,
+.library-select-menu button.active {
+  background: linear-gradient(
+    90deg,
+    rgba(190, 134, 45, 0.08),
+    rgba(208, 157, 62, 0.25),
+    rgba(190, 134, 45, 0.08)
+  );
+  color: #251005;
+}
+
+.library-select-menu button.selected {
+  color: #6d4317;
+  font-weight: 800;
+}
+
+.library-select-check {
+  color: #a87525;
+  font-size: 8px;
+}
+
+.books-filter-bar > .library-select {
+  height: 42px;
+  background-color: transparent;
+  background-image: var(--books-filter-frame);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 123% 304%;
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.18));
+}
+
+.books-filter-bar > .library-select:focus-within,
+.books-filter-bar > .library-select.is-open {
+  filter: brightness(1.035)
+    drop-shadow(0 0 6px rgba(229, 185, 88, 0.4))
+    drop-shadow(0 4px 6px rgba(0, 0, 0, 0.18));
+}
+
+.books-filter-bar .library-select-trigger {
+  padding: 0 13px 0 15px;
+  font-size: clamp(11px, 0.82vw, 14px);
+}
+
+.books-balcony-transition {
+  position: absolute;
+  left: -24px;
+  bottom: -1px;
+  z-index: 2;
+  display: block;
+  width: calc(100% + 48px);
+  height: auto;
+  transform: translateY(32%);
+  pointer-events: none;
+  user-select: none;
+}
+
+.bookcase-view {
+  position: relative;
+  z-index: 1;
+  background: #080a18;
+}
+
+.bookshelf-page-background {
+  margin: 0;
+}
+
+@media (max-width: 1250px) {
+  .books-gallery-header {
+    min-height: 500px;
+    padding-inline: 28px;
+  }
+
+  .books-page-header,
+  .books-toolbar,
+  .books-filter-bar {
+    padding-left: 50px;
+  }
+
+  .books-filter-bar {
+    grid-template-columns: repeat(4, 1fr);
+    row-gap: 5px;
+  }
+}
+
+@media (max-width: 760px) {
+  .books-gallery-header {
+    min-height: 620px;
+    padding: 82px 18px 190px;
+    background-size: auto 100%;
+  }
+
+  .books-page-header {
+    padding-left: 0;
+    flex-direction: column;
+  }
+
+  .books-add-button {
+    position: absolute;
+    top: 0;
+    right: 0;
+  }
+
+  .books-toolbar {
+    padding-left: 0;
+    flex-direction: column;
+  }
+
+  .books-search-frame,
+  .books-sort-frame {
+    width: 100%;
+    flex-basis: auto;
+  }
+
+  .books-filter-bar {
+    padding-left: 0;
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .books-balcony-transition {
+    width: 150%;
+    left: 50%;
+    transform: translate(-50%, 32%);
+  }
+}
+
+/* =========================================================
+   GLIMPSE INSIDE LAYOUT FIX — V2
+   Kept at the end of the file so earlier textarea rules
+   cannot override these two purpose-specific layouts.
+========================================================= */
+
+/* Small preview on the Book Details page. */
+.add-book-ledger:not(.add-book-focused-ledger)
+  .add-book-right-page
+  .ledger-field-description
+  textarea {
+  display: block !important;
+  width: 100% !important;
+  height: 105px !important;
+  min-height: 105px !important;
+  max-height: 105px !important;
+  margin: 0 !important;
+  padding: 3px 5px 8px !important;
+  box-sizing: border-box !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  resize: none !important;
+}
+
+/* Expanded Glimpse Inside page. */
+.add-book-focused-ledger
+  .add-book-right-page.focused-writing-right {
+  height: 63.2% !important;
+  max-height: 63.2% !important;
+  padding: 0 8px 0 0 !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}
+
+.add-book-focused-ledger
+  .add-book-right-page
+  .focused-writing-area {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 8px 8px 12px !important;
+  box-sizing: border-box !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  resize: none !important;
+}
+
+/* =========================================================
+   METADATA-AWARE DESCRIPTION PREVIEW — V3
+   Series fields consume vertical space. When they are absent,
+   the synopsis may use the newly available room.
+========================================================= */
+
+.add-book-ledger:not(.add-book-focused-ledger)
+  .add-book-right-page.ledger-has-series
+  .ledger-field-description
+  textarea {
+  height: 105px !important;
+  min-height: 105px !important;
+  max-height: 105px !important;
+}
+
+.add-book-ledger:not(.add-book-focused-ledger)
+  .add-book-right-page.ledger-no-series
+  .ledger-field-description
+  textarea {
+  height: 205px !important;
+  min-height: 205px !important;
+  max-height: 205px !important;
 }

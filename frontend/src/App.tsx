@@ -7,12 +7,6 @@ import BooksPage from "./pages/BooksPage";
 export type AppPage =
   | "My Library"
   | "Books"
-  | "Authors"
-  | "Quotes"
-  | "Reading Experiences"
-  | "Journal"
-  | "TBR"
-  | "Wishlist"
   | "Collections"
   | "Goals"
   | "Insights"

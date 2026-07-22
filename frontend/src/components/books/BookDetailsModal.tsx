@@ -6,6 +6,7 @@ import ReadingExperienceModal from "./ReadingExperienceModal";
 import type { ReadingExperience, ShelfBook } from "../../pages/BooksPage";
 import { ratingIcons } from "./bookLedgerConfig";
 import RatingDisplay from "./RatingDisplay";
+import { readingExperienceApi } from "../../api/libraryLaneApi";
 
 type Option = {
   label: string;
@@ -17,6 +18,10 @@ type BookDetailsModalProps = {
   book: ShelfBook | null;
   onClose: () => void;
   onSave: (book: ShelfBook) => void;
+  onReadingExperiencesChange: (
+    bookId: string,
+    experiences: ReadingExperience[]
+  ) => void;
   onDelete: (bookId: string) => void;
 };
 
@@ -113,6 +118,7 @@ export default function BookDetailsModal({
   book,
   onClose,
   onSave,
+  onReadingExperiencesChange,
   onDelete,
 }: BookDetailsModalProps) {
   const [draftBook, setDraftBook] = useState<ShelfBook | null>(book);
@@ -136,7 +142,10 @@ export default function BookDetailsModal({
     setLedgerPage(0);
     setExperienceModalOpen(false);
     setSelectedExperience(null);
-  }, [book]);
+    // Reset only when the modal opens or a genuinely different book is
+    // selected. Saving an experience updates the current book object in the
+    // parent; that must not throw the reader back to the book's first page.
+  }, [book?.id, isOpen]);
 
   useEffect(() => {
   localStorage.setItem(
@@ -215,50 +224,245 @@ export default function BookDetailsModal({
     setExperienceModalOpen(true);
   }
 
-  function handleSaveExperience(savedExperience: ReadingExperience) {
-  setSelectedExperience(savedExperience);
+ function mapReadingStatusToBackend(status?: string) {
+  switch (status) {
+    case "TO_READ":
+      return "TBR";
+    case "READING":
+      return "CURRENTLY_READING";
+    case "COMPLETED":
+      return "COMPLETED";
+    case "DNF":
+      return "DNF";
+    default:
+      return "TBR";
+  }
+}
 
-  setDraftBook((prev) => {
-    if (!prev) return prev;
+function mapFormatToBackend(format?: string) {
+  switch (format) {
+    case "PHYSICAL":
+      return "PHYSICAL_BOOK";
+    case "EBOOK":
+      return "E_BOOK";
+    case "AUDIOBOOK":
+      return "AUDIO_BOOK";
+    case "MIXED":
+      return "MIXED_FORMATS";
+    default:
+      return "PHYSICAL_BOOK";
+  }
+}
 
-    const alreadyExists = prev.readingExperiences.some(
-      (experience) => experience.id === savedExperience.id
+function toNumberOrNull(value?: string) {
+  if (!value) return null;
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function handleSaveExperience(
+  savedExperience: ReadingExperience
+) {
+  try {
+    const bookId = Number(currentBook.id);
+
+    if (!Number.isFinite(bookId) || bookId <= 0) {
+      throw new Error(
+        "This book does not have a valid database ID, so its reading experience cannot be saved yet."
+      );
+    }
+
+    const backendId = Number(savedExperience.id);
+
+    const isExistingBackendExperience =
+      Number.isFinite(backendId) && backendId > 0;
+
+    const payload = {
+      label: savedExperience.label,
+
+      format: mapFormatToBackend(savedExperience.format),
+      status: mapReadingStatusToBackend(savedExperience.readingStatus),
+
+      startDate: savedExperience.startDate || null,
+      finishDate: savedExperience.finishDate || null,
+
+      currentPage: toNumberOrNull(savedExperience.currentPage),
+      totalPages: toNumberOrNull(savedExperience.pageCount),
+
+      listeningSpeed: toNumberOrNull(savedExperience.listeningSpeed),
+
+      predictedRating: savedExperience.predictedRating,
+      currentRating: savedExperience.currentRating,
+      initialRating: savedExperience.initialRating,
+      finalRating: savedExperience.finalRating,
+      rereadRating: savedExperience.rereadRating,
+      emotionalDevastationRating:
+        savedExperience.emotionalDevastationRating,
+
+      excitementRating: savedExperience.excitementRating,
+      currentExcitementRating:
+        savedExperience.currentExcitementRating,
+      excitementWhileReading:
+        savedExperience.excitementWhileReading,
+
+      romancePresence: savedExperience.romancePresence,
+      romanceImportance: savedExperience.romanceImportance,
+      romanceRating: savedExperience.romanceRating,
+      spiceRating: savedExperience.spiceRating,
+      horrorRating: savedExperience.horrorRating,
+
+      romanceNotes: savedExperience.romanceNotes,
+      reviewText: savedExperience.notes,
+      dnfReason: savedExperience.dnfReason,
+      promptResponsesJson: savedExperience.promptResponsesJson,
+
+      currentExperience: savedExperience.readingStatus === "READING",
+
+      book: {
+        id: bookId,
+      },
+    };
+
+    const savedFromBackend = isExistingBackendExperience
+      ? await readingExperienceApi.update(backendId, payload)
+      : await readingExperienceApi.create(payload);
+
+    const updatedExperience = {
+      ...savedExperience,
+      id: String(savedFromBackend.id),
+      createdAt:
+        savedExperience.createdAt ||
+        savedFromBackend.createdAt ||
+        new Date().toISOString(),
+    };
+
+    setSelectedExperience(updatedExperience);
+
+    const oldId = savedExperience.id;
+    const newId = updatedExperience.id;
+    const existingExperiences = currentBook.readingExperiences ?? [];
+    const alreadyExists = existingExperiences.some(
+      (experience) =>
+        experience.id === oldId || experience.id === newId
     );
 
     const updatedExperiences = alreadyExists
-      ? prev.readingExperiences.map((experience) =>
-          experience.id === savedExperience.id ? savedExperience : experience
+      ? existingExperiences.map((experience) =>
+          experience.id === oldId || experience.id === newId
+            ? updatedExperience
+            : experience
         )
-      : [...prev.readingExperiences, savedExperience];
+      : [...existingExperiences, updatedExperience];
 
-    return {
-      ...prev,
-
-      title: savedExperience.title?.trim() || prev.title,
-      author: savedExperience.author?.trim() || prev.author,
-      genre: savedExperience.genre?.trim() || prev.genre,
-      seriesName: savedExperience.seriesName?.trim() || prev.seriesName,
-
-      readingStatus: savedExperience.readingStatus || prev.readingStatus,
-      format: savedExperience.format || prev.format,
-      startDate: savedExperience.startDate || prev.startDate,
-      finishDate: savedExperience.finishDate || prev.finishDate,
-      pageCount: savedExperience.pageCount || prev.pageCount,
-      audioLength: savedExperience.audioLength || prev.audioLength,
-      finalRating: savedExperience.finalRating || prev.finalRating,
-rereadRating: savedExperience.rereadRating || prev.rereadRating,
-emotionalDevastationRating:
-  savedExperience.emotionalDevastationRating ||
-  prev.emotionalDevastationRating,
-
-romancePresence: savedExperience.romancePresence || prev.romancePresence,
-romanceRating: savedExperience.romanceRating || prev.romanceRating,
-spiceRating: savedExperience.spiceRating || prev.spiceRating,
-horrorRating: savedExperience.horrorRating || prev.horrorRating,
-
-readingExperiences: updatedExperiences,
+    // The first experience spread also displays shared Book metadata. If the
+    // reader edits those fields there, carry them into the parent book draft
+    // so the parent Save Changes button can persist them through /api/books.
+    const updatedBookMetadata = {
+      title: savedExperience.title?.trim() || currentBook.title,
+      author:
+        savedExperience.author !== undefined
+          ? savedExperience.author.trim()
+          : currentBook.author,
+      genre:
+        savedExperience.genre !== undefined
+          ? savedExperience.genre.trim()
+          : currentBook.genre,
+      seriesName:
+        savedExperience.seriesName !== undefined
+          ? savedExperience.seriesName.trim()
+          : currentBook.seriesName,
+      seriesNumber:
+        savedExperience.seriesNumber !== undefined
+          ? savedExperience.seriesNumber.trim()
+          : currentBook.seriesNumber,
+      isSeries:
+        savedExperience.isSeries !== undefined
+          ? savedExperience.isSeries.trim()
+          : currentBook.isSeries,
+      subtitle:
+        savedExperience.subtitle !== undefined
+          ? savedExperience.subtitle.trim()
+          : currentBook.subtitle,
+      description:
+        savedExperience.description !== undefined
+          ? savedExperience.description.trim()
+          : currentBook.description,
+      publisher:
+        savedExperience.publisher !== undefined
+          ? savedExperience.publisher.trim()
+          : currentBook.publisher,
+      publisherOther:
+        savedExperience.publisherOther !== undefined
+          ? savedExperience.publisherOther.trim()
+          : currentBook.publisherOther,
+      publicationYear:
+        savedExperience.publicationYear !== undefined
+          ? savedExperience.publicationYear.trim()
+          : currentBook.publicationYear,
+      editionFormat:
+        savedExperience.editionFormat !== undefined
+          ? savedExperience.editionFormat.trim()
+          : currentBook.editionFormat,
+      narrator:
+        savedExperience.narrator !== undefined
+          ? savedExperience.narrator.trim()
+          : currentBook.narrator,
+      coverUrl:
+        savedExperience.coverUrl !== undefined
+          ? savedExperience.coverUrl.trim()
+          : currentBook.coverUrl,
+      language:
+        savedExperience.language !== undefined
+          ? savedExperience.language.trim()
+          : currentBook.language,
+      isbn10:
+        savedExperience.isbn10 !== undefined
+          ? savedExperience.isbn10.trim()
+          : currentBook.isbn10,
+      isbn13:
+        savedExperience.isbn13 !== undefined
+          ? savedExperience.isbn13.trim()
+          : currentBook.isbn13,
+      catalogProvider:
+        savedExperience.catalogProvider !== undefined
+          ? savedExperience.catalogProvider.trim()
+          : currentBook.catalogProvider,
+      catalogProviderId:
+        savedExperience.catalogProviderId !== undefined
+          ? savedExperience.catalogProviderId.trim()
+          : currentBook.catalogProviderId,
+      pageCount:
+        savedExperience.pageCount !== undefined
+          ? savedExperience.pageCount.trim()
+          : currentBook.pageCount,
+      audioLength:
+        savedExperience.audioLength !== undefined
+          ? savedExperience.audioLength.trim()
+          : currentBook.audioLength,
     };
-  });
+
+    setDraftBook((prev) =>
+      prev
+        ? {
+            ...prev,
+            ...updatedBookMetadata,
+            readingExperiences: updatedExperiences,
+          }
+        : prev
+    );
+
+    // Update BooksPage state without issuing a second PUT /api/books/{id}.
+    onReadingExperiencesChange(currentBook.id, updatedExperiences);
+  } catch (error) {
+    console.error("Failed to save reading experience", error);
+    const message =
+      error instanceof Error
+        ? error.message
+        : "The reading experience could not be saved.";
+    window.alert(message);
+    throw error;
+  }
 }
 
 function handleSave() {
@@ -696,10 +900,6 @@ function renderBookRecordPage() {
           style={{ backgroundImage: `url(${openBookBg})` }}
         >
           {renderCurrentPage()}
-
-          <div className="add-book-page-count">
-            Page {ledgerPage + 1} of {pageCount}
-          </div>
 
           <div className="add-book-actions add-book-actions-left">
             <button

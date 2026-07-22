@@ -6,6 +6,7 @@ import lombok.*;
 import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.Set;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 @Entity
 @Table(name = "authors")
@@ -39,6 +40,7 @@ public class Author {
 
     private String photoUrl;
 
+    @JsonIgnore
     @ManyToMany(mappedBy = "authors")
     private Set<Book> books = new HashSet<>();
 }

@@ -4,12 +4,6 @@ import sidebarBg from "../assets/storybook/backgrounds/fantasy-sidebar.png";
 const navItems: AppPage[] = [
   "My Library",
   "Books",
-  "Authors",
-  "Quotes",
-  "Reading Experiences",
-  "Journal",
-  "TBR",
-  "Wishlist",
   "Collections",
   "Goals",
   "Insights",
@@ -39,11 +33,13 @@ export default function FantasySidebar({
         </div>
       </div>
 
-      <nav className="sidebar-nav">
+      <nav className="sidebar-nav" aria-label="Library navigation">
         {navItems.map((item) => (
           <button
             key={item}
+            type="button"
             className={currentPage === item ? "active" : ""}
+            aria-current={currentPage === item ? "page" : undefined}
             onClick={() => setCurrentPage(item)}
           >
             {item}

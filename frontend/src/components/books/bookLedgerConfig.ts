@@ -69,6 +69,7 @@ export const statusOptions: Option[] = [
 ];
 
 export const yesNoOptions: Option[] = [
+  { label: "Unknown", value: "" },
   { label: "No", value: "NO" },
   { label: "Yes", value: "YES" },
 ];
@@ -263,6 +264,16 @@ export const basePages: LedgerPage[] = [
         f("audioLength", "Audiobook Length", "input", "e.g. 18h 22m", {
           showIf: isAudio,
         }),
+        f("narrator", "Narrated By", "input", "e.g. Rebecca Soler", {
+          showIf: isAudio,
+        }),
+        f(
+          "description",
+          "A Glimpse Inside",
+          "textarea",
+          "The publisher's story description…",
+          { rows: 4 }
+        ),
       ],
     },
   },
@@ -281,7 +292,6 @@ export const basePages: LedgerPage[] = [
         f("listeningSpeed", "Listening Speed", "input", "e.g. 1.25", {
           showIf: isAudio,
         }),
-        f("narrator", "Narrator", "input", "Optional", { showIf: isAudio }),
         f("startDate", "Start Date", "input", "June 14, 2026"),
         f("finishDate", "Finish Date", "input", "June 21, 2026"),
       ],
