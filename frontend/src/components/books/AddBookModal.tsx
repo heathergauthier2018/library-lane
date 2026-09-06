@@ -2,6 +2,7 @@
 // Keeps the catalog and every selection visually inside the storybook ledger.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, FocusEvent, MouseEvent } from "react";
+import { createPortal } from "react-dom";
 
 import openBookBg from "../../assets/storybook/backgrounds/add-book-background.png";
 import closeBookFrame from "../../assets/storybook/frames/close-book-frame.png";
@@ -25,6 +26,18 @@ import {
 } from "../../api/libraryLaneApi";
 
 export type { NewBook } from "./bookLedgerConfig";
+
+const SPOTIFY_FULL_LOGO =
+  "https://developer-assets.spotifycdn.com/images/guidelines/design/full-logo-framed.svg";
+
+function spotifyAudiobookUrl(providerId: string) {
+  const legacyAlbumPrefix = "album:";
+  if (providerId.startsWith(legacyAlbumPrefix)) {
+    const albumId = providerId.slice(legacyAlbumPrefix.length);
+    return `https://open.spotify.com/album/${encodeURIComponent(albumId)}`;
+  }
+  return `https://open.spotify.com/audiobook/${encodeURIComponent(providerId)}`;
+}
 
 function catalogSearchField(field: string): CatalogSearchField {
   if (field === "author") return "AUTHOR";
@@ -123,6 +136,7 @@ function clearImportedMetadata(book: NewBook): NewBook {
     publisher: "",
     publisherOther: "",
     publicationYear: "",
+    editionFormat: "",
     pageCount: "",
     audioLength: "",
     narrator: "",
@@ -451,14 +465,27 @@ function FantasyDropdown({
   );
   const writingTextRef = useRef<HTMLSpanElement>(null);
   const dropdownButtonRef = useRef<HTMLButtonElement>(null);
+  const dropdownWrapRef = useRef<HTMLDivElement>(null);
   const intervalRef = useRef<number | null>(null);
   const timeoutRefs = useRef<number[]>([]);
   const [writingPosition, setWritingPosition] = useState({ x: 5, y: 18 });
+  const [menuPosition, setMenuPosition] = useState({
+    top: 0,
+    left: 0,
+    width: 226,
+    maxHeight: 310,
+    opensUp: false,
+  });
 
   useEffect(() => {
+    const timers = timeoutRefs.current;
+
     return () => {
-      if (intervalRef.current !== null) window.clearInterval(intervalRef.current);
-      timeoutRefs.current.forEach((timer) => window.clearTimeout(timer));
+      if (intervalRef.current !== null) {
+        window.clearInterval(intervalRef.current);
+      }
+
+      timers.forEach((timer) => window.clearTimeout(timer));
     };
   }, []);
 
@@ -478,6 +505,48 @@ function FantasyDropdown({
       y: text.offsetTop + lineHeight * 0.8,
     });
   }, [typedSelection, writingTarget]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+
+    function placeMenu() {
+      const button = dropdownButtonRef.current;
+      if (!button) return;
+
+      const bounds = button.getBoundingClientRect();
+      const viewportPadding = 12;
+      const gap = 4;
+      const naturalHeight = Math.min(310, options.length * 39 + 16);
+      const roomBelow = window.innerHeight - bounds.bottom - viewportPadding;
+      const roomAbove = bounds.top - viewportPadding;
+      const opensUp = roomBelow < naturalHeight && roomAbove > roomBelow;
+      const availableHeight = Math.max(
+        82,
+        Math.min(310, (opensUp ? roomAbove : roomBelow) - gap),
+      );
+      const width = Math.min(
+        Math.max(226, bounds.width * 0.78),
+        window.innerWidth - viewportPadding * 2,
+      );
+      const left = Math.min(
+        Math.max(viewportPadding, bounds.left),
+        window.innerWidth - width - viewportPadding,
+      );
+      const top = opensUp
+        ? Math.max(viewportPadding, bounds.top - Math.min(naturalHeight, availableHeight) - gap)
+        : bounds.bottom + gap;
+
+      setMenuPosition({ top, left, width, maxHeight: availableHeight, opensUp });
+    }
+
+    placeMenu();
+    window.addEventListener("resize", placeMenu);
+    window.addEventListener("scroll", placeMenu, true);
+    return () => {
+      window.removeEventListener("resize", placeMenu);
+      window.removeEventListener("scroll", placeMenu, true);
+    };
+  }, [isOpen, options.length]);
 
   function chooseOption(option: Option) {
     if (prefersReducedMotion()) {
@@ -521,6 +590,7 @@ function FantasyDropdown({
 
   return (
     <div
+      ref={dropdownWrapRef}
       className={`fantasy-dropdown-wrap ${
         writingTarget ? "quill-writing-selection" : ""
       }`}
@@ -560,8 +630,19 @@ function FantasyDropdown({
         <span className="fantasy-dropdown-arrow">⌄</span>
       </button>
 
-      {isOpen && !writingTarget && (
-        <div className="fantasy-dropdown-menu" role="listbox">
+      {isOpen && !writingTarget && createPortal(
+        <div
+          className={`fantasy-dropdown-menu fantasy-dropdown-portal ${
+            menuPosition.opensUp ? "opens-up" : "opens-down"
+          }`}
+          role="listbox"
+          style={{
+            top: `${menuPosition.top}px`,
+            left: `${menuPosition.left}px`,
+            width: `${menuPosition.width}px`,
+            maxHeight: `${menuPosition.maxHeight}px`,
+          }}
+        >
           {options.map((option) => (
             <button
               type="button"
@@ -574,7 +655,8 @@ function FantasyDropdown({
               {option.label}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -717,6 +799,16 @@ function CatalogResults({
                 .join(" • ")}
             </small>
             <em>{result.format.replace("EBOOK", "E-BOOK")}</em>
+            {result.provider.toLowerCase().includes("apple audiobook") && (
+              <small className="catalog-result-source">
+                Audiobook catalog record from Apple Books
+              </small>
+            )}
+            {result.provider.toLowerCase().includes("spotify audiobook album") && (
+              <small className="catalog-result-source">
+                Legacy audiobook edition available through Spotify
+              </small>
+            )}
           </span>
         </button>
       ))}
@@ -813,6 +905,31 @@ function RenderField({
     );
   }
 
+  // Audiobooks can have a principal narrator, guest narrators, and bonus-
+  // chapter performers. Keep the complete credited list visible and let the
+  // reader open it on the full writing page instead of clipping it inside a
+  // single-line input.
+  if (field.key === "narrator") {
+    return (
+      <label className="ledger-long-prompt ledger-field-narrator">
+        <button
+          type="button"
+          className="ledger-prompt-title-button"
+          onClick={() => openPrompt(field)}
+        >
+          {field.label}
+        </button>
+
+        <EnchantedTextarea
+          rows={2}
+          placeholder={field.placeholder}
+          value={value}
+          onChange={(nextValue) => updateField(field.key, nextValue)}
+        />
+      </label>
+    );
+  }
+
   const isCatalogField = ["title", "author", "seriesName"].includes(field.key);
 
   return (
@@ -894,26 +1011,28 @@ function LedgerSide({
     <section
       className={`add-book-page ${className} ${seriesLayoutClass}`}
     >
-      {side.eyebrow && <p className="add-book-eyebrow">{side.eyebrow}</p>}
-      {side.title && <h2>{side.title}</h2>}
+      <div className="ledger-page-scroll-content" key={pageNumber}>
+        {side.eyebrow && <p className="add-book-eyebrow">{side.eyebrow}</p>}
+        {side.title && <h2>{side.title}</h2>}
 
-      {side.fields.map((field) => (
-        <RenderField
-          key={field.key}
-          field={field}
-          book={book}
-          updateField={updateField}
-          openPrompt={openPrompt}
-          activeCatalogField={activeCatalogField}
-          setActiveCatalogField={setActiveCatalogField}
-          catalogSearching={catalogSearching}
-          catalogMessage={catalogMessage}
-          catalogResults={catalogResults}
-          applyCatalogResult={applyCatalogResult}
-          openDropdown={openDropdown}
-          toggleDropdown={toggleDropdown}
-        />
-      ))}
+        {side.fields.map((field) => (
+          <RenderField
+            key={field.key}
+            field={field}
+            book={book}
+            updateField={updateField}
+            openPrompt={openPrompt}
+            activeCatalogField={activeCatalogField}
+            setActiveCatalogField={setActiveCatalogField}
+            catalogSearching={catalogSearching}
+            catalogMessage={catalogMessage}
+            catalogResults={catalogResults}
+            applyCatalogResult={applyCatalogResult}
+            openDropdown={openDropdown}
+            toggleDropdown={toggleDropdown}
+          />
+        ))}
+      </div>
 
       <span className="ledger-page-number">
         {pageNumber} of {totalPages}
@@ -944,11 +1063,7 @@ export default function AddBookModal({
   useEffect(() => {
     const query = catalogQuery.trim();
 
-    if (query.length < 3) {
-      setCatalogResults([]);
-      setCatalogMessage("");
-      return;
-    }
+    if (query.length < 3) return;
 
     let active = true;
     const timeout = window.setTimeout(async () => {
@@ -957,7 +1072,8 @@ export default function AddBookModal({
 
       try {
         // Search every available format. The chosen result, not the form's
-        // default, decides whether the saved experience is print or e-book.
+        // default, decides whether the saved experience is print, e-book, or
+        // audiobook.
         const results = await catalogApi.searchBooks(
           query,
           undefined,
@@ -985,7 +1101,9 @@ export default function AddBookModal({
       } finally {
         if (active) setCatalogSearching(false);
       }
-    }, 450);
+      // A slightly longer pause prevents a separate Apple request for nearly
+      // every partial word while leaving the established results unchanged.
+    }, 750);
 
     return () => {
       active = false;
@@ -1029,7 +1147,10 @@ export default function AddBookModal({
 
     function dismissDropdown(event: PointerEvent) {
       const target = event.target;
-      if (target instanceof Element && target.closest(".fantasy-dropdown-wrap")) {
+      if (
+        target instanceof Element &&
+        target.closest(".fantasy-dropdown-wrap, .fantasy-dropdown-portal")
+      ) {
         return;
       }
       setOpenDropdown("");
@@ -1095,10 +1216,34 @@ export default function AddBookModal({
         next = { ...next, seriesName: "", seriesNumber: "" };
       }
 
+      if (field === "format" && previous.format !== value) {
+        next = {
+          ...next,
+          catalogProvider: "",
+          catalogProviderId: "",
+          editionFormat: "",
+          isbn10: "",
+          isbn13: "",
+          pageCount: value === "AUDIOBOOK" ? "" : next.pageCount,
+          audioLength: value === "AUDIOBOOK" ? next.audioLength : "",
+          narrator: value === "AUDIOBOOK" ? next.narrator : "",
+          // A catalog synopsis can describe a particular audiobook production
+          // rather than the underlying work. Do not carry it into another
+          // manually selected format.
+          description: previous.catalogProviderId ? "" : next.description,
+        };
+      }
+
       return next;
     });
 
     if (field === "title" || field === "author" || field === "seriesName") {
+      if (value.trim().length < 3) {
+        setCatalogResults([]);
+        setCatalogMessage("");
+        setCatalogSearching(false);
+      }
+
       setActiveCatalogField(field);
       setCatalogQuery(value);
     }
@@ -1128,7 +1273,7 @@ export default function AddBookModal({
     );
 
     setBook((previous) => ({
-      ...previous,
+      ...clearImportedMetadata(previous),
       title: result.title || previous.title,
       subtitle: result.subtitle || "",
       author: result.authors.join(", "),
@@ -1274,6 +1419,20 @@ export default function AddBookModal({
           pageNumber={rightPageNumber}
           totalPages={totalLedgerPages}
         />
+
+        {book.catalogProvider?.toLowerCase().includes("spotify audiobook") &&
+          book.catalogProviderId && (
+            <a
+              className="spotify-audiobook-attribution"
+              href={spotifyAudiobookUrl(book.catalogProviderId)}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Open this audiobook on Spotify"
+            >
+              <img src={SPOTIFY_FULL_LOGO} alt="Spotify" />
+              <span>Open audiobook</span>
+            </a>
+          )}
 
         <div className="add-book-actions add-book-actions-left">
           <button

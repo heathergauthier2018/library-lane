@@ -48,6 +48,16 @@ type ReadingExperienceModalProps = {
   onSave: (experience: ReadingExperience) => Promise<void>;
 };
 
+const SPOTIFY_FULL_LOGO =
+  "https://storage.googleapis.com/pr-newsroom-wp/1/2023/05/Spotify_Full_Logo_RGB_Green.png";
+
+function spotifyAudiobookUrl(providerId: string) {
+  const [kind, id] = providerId.split(":", 2);
+  if (kind === "album") return `https://open.spotify.com/album/${id}`;
+  if (kind === "show") return `https://open.spotify.com/show/${id}`;
+  return `https://open.spotify.com/audiobooks`;
+}
+
 function catalogSearchField(field: string): CatalogSearchField {
   if (field === "author") return "AUTHOR";
   if (field === "seriesName") return "SERIES";
@@ -557,9 +567,14 @@ function FantasyDropdown({
   const [writingPosition, setWritingPosition] = useState({ x: 5, y: 18 });
 
   useEffect(() => {
+    const timers = timeoutRefs.current;
+
     return () => {
-      if (intervalRef.current !== null) window.clearInterval(intervalRef.current);
-      timeoutRefs.current.forEach((timer) => window.clearTimeout(timer));
+      if (intervalRef.current !== null) {
+        window.clearInterval(intervalRef.current);
+      }
+
+      timers.forEach((timer) => window.clearTimeout(timer));
     };
   }, []);
 
@@ -900,6 +915,23 @@ function RenderField({
   if (!isEditing) {
     if (!hasReadableValue(value)) return null;
 
+    if (field.key === "narrator") {
+      return (
+        <div className="ledger-readonly-field ledger-field-narrator">
+          <button
+            type="button"
+            className="ledger-prompt-title-button"
+            onClick={() => openPrompt(field)}
+          >
+            {field.label}
+          </button>
+          <p className="ledger-readonly-text reader-handwriting">
+            {formatReadonlyValue(field, value)}
+          </p>
+        </div>
+      );
+    }
+
     if (field.type === "rating") {
       const ratingIcon = field.ratingIcon ?? "overall";
 
@@ -986,6 +1018,27 @@ function RenderField({
 
         <LivingQuillTextarea
           rows={field.rows ?? 3}
+          placeholder={field.placeholder}
+          value={value}
+          onChange={(nextValue) => updateField(field.key, nextValue)}
+        />
+      </label>
+    );
+  }
+
+  if (field.key === "narrator") {
+    return (
+      <label className="ledger-long-prompt ledger-field-narrator">
+        <button
+          type="button"
+          className="ledger-prompt-title-button"
+          onClick={() => openPrompt(field)}
+        >
+          {field.label}
+        </button>
+
+        <LivingQuillTextarea
+          rows={2}
           placeholder={field.placeholder}
           value={value}
           onChange={(nextValue) => updateField(field.key, nextValue)}
@@ -1117,15 +1170,19 @@ function LedgerSide({
   );
 }
 
-export default function ReadingExperienceModal({
-  isOpen,
+type ReadingExperienceModalContentProps = Omit<
+  ReadingExperienceModalProps,
+  "isOpen"
+>;
+
+function ReadingExperienceModalContent({
   book,
   experience,
   onClose,
   onSave,
-}: ReadingExperienceModalProps) {
+}: ReadingExperienceModalContentProps) {
   const [draftExperience, setDraftExperience] =
-    useState<ExperienceDraft | null>(null);
+    useState<ExperienceDraft | null>(() => experienceToDraft(book, experience));
   const [ledgerPage, setLedgerPage] = useState(0);
   const [focusedPrompt, setFocusedPrompt] = useState<FieldConfig | null>(null);
   const [isEditing, setIsEditing] = useState(!experience);
@@ -1137,31 +1194,10 @@ export default function ReadingExperienceModal({
   const [openDropdown, setOpenDropdown] = useState("");
 
   useEffect(() => {
-    setDraftExperience(experienceToDraft(book, experience));
-    setFocusedPrompt(null);
-    setIsEditing(!experience);
-    setCatalogQuery("");
-    setActiveCatalogField("");
-    setCatalogResults([]);
-    setCatalogSearching(false);
-    setCatalogMessage("");
-    setOpenDropdown("");
-
-    if (!experience) {
-      setLedgerPage(0);
-    }
-  }, [book, experience]);
-
-  useEffect(() => {
     if (!isEditing) return;
 
     const query = catalogQuery.trim();
-    if (query.length < 3 || !activeCatalogField) {
-      setCatalogResults([]);
-      setCatalogMessage("");
-      setCatalogSearching(false);
-      return;
-    }
+    if (query.length < 3 || !activeCatalogField) return;
 
     let active = true;
     const timeout = window.setTimeout(async () => {
@@ -1262,15 +1298,7 @@ export default function ReadingExperienceModal({
     return getLedgerPages(draftExperience as NewBook);
   }, [draftExperience]);
 
-  useEffect(() => {
-    if (ledgerPages.length === 0) return;
-
-    setLedgerPage((prev) =>
-      Math.min(prev, Math.max(ledgerPages.length - 1, 0))
-    );
-  }, [ledgerPages.length]);
-
-  if (!isOpen || !draftExperience || ledgerPages.length === 0) return null;
+  if (!draftExperience || ledgerPages.length === 0) return null;
 
   const safeLedgerPage = Math.min(ledgerPage, ledgerPages.length - 1);
   const currentPage = ledgerPages[safeLedgerPage];
@@ -1309,6 +1337,12 @@ export default function ReadingExperienceModal({
     );
 
     if (field === "title" || field === "author" || field === "seriesName") {
+      if (value.trim().length < 3) {
+        setCatalogResults([]);
+        setCatalogMessage("");
+        setCatalogSearching(false);
+      }
+
       setActiveCatalogField(field);
       setCatalogQuery(value);
     }
@@ -1507,6 +1541,22 @@ export default function ReadingExperienceModal({
           totalPages={totalDisplayedPages}
         />
 
+        {draftExperience.catalogProvider
+          ?.toLowerCase()
+          .includes("spotify audiobook") &&
+          draftExperience.catalogProviderId && (
+            <a
+              className="spotify-audiobook-attribution"
+              href={spotifyAudiobookUrl(draftExperience.catalogProviderId)}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Open this audiobook on Spotify"
+            >
+              <img src={SPOTIFY_FULL_LOGO} alt="Spotify" />
+              <span>Open audiobook</span>
+            </a>
+          )}
+
         <div className="add-book-actions add-book-actions-left">
           <button
             type="button"
@@ -1523,7 +1573,7 @@ export default function ReadingExperienceModal({
                 type="button"
                 className="add-book-frame-button close-book-button"
                 onClick={() =>
-                  setLedgerPage((prev) => Math.max(prev - 1, 0))
+                  setLedgerPage(Math.max(safeLedgerPage - 1, 0))
                 }
                 style={{ backgroundImage: `url(${closeBookFrame})` }}
               >
@@ -1538,8 +1588,8 @@ export default function ReadingExperienceModal({
                 type="button"
                 className="add-book-frame-button close-book-button"
                 onClick={() =>
-                  setLedgerPage((prev) =>
-                    Math.min(prev + 1, ledgerPages.length - 1)
+                  setLedgerPage(
+                    Math.min(safeLedgerPage + 1, ledgerPages.length - 1)
                   )
                 }
                 style={{ backgroundImage: `url(${closeBookFrame})` }}
@@ -1573,5 +1623,23 @@ export default function ReadingExperienceModal({
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ReadingExperienceModal(
+  props: ReadingExperienceModalProps
+) {
+  if (!props.isOpen) return null;
+
+  const experienceKey = props.experience?.id ?? "new";
+
+  return (
+    <ReadingExperienceModalContent
+      key={`${props.book.id}:${experienceKey}`}
+      book={props.book}
+      experience={props.experience}
+      onClose={props.onClose}
+      onSave={props.onSave}
+    />
   );
 }

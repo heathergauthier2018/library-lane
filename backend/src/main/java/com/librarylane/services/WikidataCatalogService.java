@@ -75,7 +75,11 @@ public class WikidataCatalogService {
         for (String id : candidateIds) {
             JsonNode entity = entities.path(id);
             String title = label(entity);
-            if (!normalize(title).equals(wantedTitle)) continue;
+            boolean titleMatch = normalize(title).equals(wantedTitle)
+                    || aliases(entity).stream()
+                    .map(WikidataCatalogService::normalize)
+                    .anyMatch(wantedTitle::equals);
+            if (!titleMatch) continue;
 
             List<String> authorIds = entityIds(entity, "P50");
             List<String> verifiedAuthors = authorIds.stream()
@@ -175,7 +179,7 @@ public class WikidataCatalogService {
         URI uri = UriComponentsBuilder.fromUriString(API)
                 .queryParam("action", "wbgetentities")
                 .queryParam("ids", String.join("|", values))
-                .queryParam("props", "labels|descriptions|claims")
+                .queryParam("props", "labels|aliases|descriptions|claims")
                 .queryParam("languages", "en")
                 .queryParam("format", "json")
                 .build().encode().toUri();
@@ -257,6 +261,17 @@ public class WikidataCatalogService {
 
     private static String label(JsonNode entity) {
         return text(entity.path("labels").path("en").path("value"));
+    }
+
+    private static List<String> aliases(JsonNode entity) {
+        List<String> values = new ArrayList<>();
+        JsonNode aliases = entity.path("aliases").path("en");
+        if (!aliases.isArray()) return values;
+        aliases.forEach(alias -> {
+            String value = text(alias.path("value"));
+            if (hasText(value) && !values.contains(value)) values.add(value);
+        });
+        return values;
     }
 
     private static String description(JsonNode entity) {

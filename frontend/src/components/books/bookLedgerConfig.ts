@@ -69,7 +69,7 @@ export const statusOptions: Option[] = [
 ];
 
 export const yesNoOptions: Option[] = [
-  { label: "Unknown", value: "" },
+  { label: "Not determined", value: "" },
   { label: "No", value: "NO" },
   { label: "Yes", value: "YES" },
 ];

@@ -113,14 +113,20 @@ function statusDisplay(value: string) {
   );
 }
 
-export default function BookDetailsModal({
-  isOpen,
+type BookDetailsModalContentProps = Omit<
+  BookDetailsModalProps,
+  "isOpen" | "book"
+> & {
+  book: ShelfBook;
+};
+
+function BookDetailsModalContent({
   book,
   onClose,
   onSave,
   onReadingExperiencesChange,
   onDelete,
-}: BookDetailsModalProps) {
+}: BookDetailsModalContentProps) {
   const [draftBook, setDraftBook] = useState<ShelfBook | null>(book);
   const [ledgerPage, setLedgerPage] = useState(0);
   const [experienceModalOpen, setExperienceModalOpen] = useState(false);
@@ -136,16 +142,6 @@ export default function BookDetailsModal({
       ) as ReaderHandwritingStyle) || "cedarville"
     );
   });
-
-  useEffect(() => {
-    setDraftBook(book);
-    setLedgerPage(0);
-    setExperienceModalOpen(false);
-    setSelectedExperience(null);
-    // Reset only when the modal opens or a genuinely different book is
-    // selected. Saving an experience updates the current book object in the
-    // parent; that must not throw the reader back to the book's first page.
-  }, [book?.id, isOpen]);
 
   useEffect(() => {
   localStorage.setItem(
@@ -166,7 +162,10 @@ export default function BookDetailsModal({
   );
 }, [readerHandwritingStyle]);
 
-  const experiences = draftBook?.readingExperiences ?? [];
+  const experiences = useMemo(
+    () => draftBook?.readingExperiences ?? [],
+    [draftBook?.readingExperiences]
+  );
 
   const readingStats = useMemo(() => {
     const finalRatings = experiences.map((experience) =>
@@ -196,7 +195,7 @@ export default function BookDetailsModal({
     };
   }, [experiences]);
 
-  if (!isOpen || !draftBook) return null;
+  if (!draftBook) return null;
 
   const currentBook = draftBook;
   const pageCount = 4;
@@ -977,5 +976,20 @@ function renderBookRecordPage() {
         />
       )}
     </>
+  );
+}
+
+export default function BookDetailsModal(props: BookDetailsModalProps) {
+  if (!props.isOpen || !props.book) return null;
+
+  return (
+    <BookDetailsModalContent
+      key={props.book.id}
+      book={props.book}
+      onClose={props.onClose}
+      onSave={props.onSave}
+      onReadingExperiencesChange={props.onReadingExperiencesChange}
+      onDelete={props.onDelete}
+    />
   );
 }
