@@ -92,6 +92,7 @@ public class ReadingExperience {
     @Column(columnDefinition = "TEXT")
     private String promptResponsesJson;
 
+    @Builder.Default
     private Boolean currentExperience = false;
 
     private LocalDateTime createdAt;

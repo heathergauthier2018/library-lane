@@ -42,5 +42,6 @@ public class Author {
 
     @JsonIgnore
     @ManyToMany(mappedBy = "authors")
+    @Builder.Default
     private Set<Book> books = new HashSet<>();
 }
