@@ -1063,7 +1063,7 @@ export default function AddBookModal({
   useEffect(() => {
     const query = catalogQuery.trim();
 
-    if (query.length < 3) return;
+    if (query.length < 3 || !activeCatalogField) return;
 
     let active = true;
     const timeout = window.setTimeout(async () => {

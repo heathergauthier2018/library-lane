@@ -16,12 +16,7 @@ import type { LibrarySelectOption } from "../components/LibrarySelect";
 import type { NewBook } from "../components/books/AddBookModal";
 import {
   bookApi,
-  catalogApi,
   readingExperienceApi,
-} from "../api/libraryLaneApi";
-import type {
-  CatalogBookFormat,
-  CatalogBookResult,
 } from "../api/libraryLaneApi";
 
 type BooksPageProps = {
@@ -961,130 +956,6 @@ function BookMotionLayer({ motion }: { motion: BookMotion | null }) {
         </div>
       </div>
     </div>
-  );
-}
-
-function catalogFormatForShelfBook(format: string): CatalogBookFormat {
-  if (format === "EBOOK") return "EBOOK";
-  if (format === "AUDIOBOOK") return "AUDIOBOOK";
-  return "PHYSICAL";
-}
-
-function normalizedPersonNames(value: string) {
-  return splitList(value)
-    .map((name) => normalizeBookText(name).replace(/[^\p{L}\p{N}]/gu, ""))
-    .filter(Boolean);
-}
-
-function coverMatchScore(book: ShelfBook, candidate: CatalogBookResult) {
-  const bookTitle = normalizeBookText(book.title);
-  const candidateTitle = normalizeBookText(candidate.title || "");
-
-  if (!bookTitle || candidateTitle !== bookTitle) return 0;
-
-  let score = 45;
-  const bookIsbn13 = book.isbn13?.replace(/\D/g, "");
-  const bookIsbn10 = book.isbn10?.replace(/\D/g, "");
-  const candidateIsbn13 = candidate.isbn13?.replace(/\D/g, "");
-  const candidateIsbn10 = candidate.isbn10?.replace(/\D/g, "");
-
-  if (
-    (bookIsbn13 && candidateIsbn13 && bookIsbn13 === candidateIsbn13) ||
-    (bookIsbn10 && candidateIsbn10 && bookIsbn10 === candidateIsbn10)
-  ) {
-    score += 100;
-  }
-
-  const expectedAuthors = normalizedPersonNames(book.author);
-  const candidateAuthors = candidate.authors.flatMap(normalizedPersonNames);
-  const authorMatches = expectedAuthors.some((expected) =>
-    candidateAuthors.some(
-      (candidateAuthor) =>
-        candidateAuthor === expected ||
-        candidateAuthor.includes(expected) ||
-        expected.includes(candidateAuthor),
-    ),
-  );
-
-  if (authorMatches) score += 35;
-  if (candidate.format === catalogFormatForShelfBook(book.format)) score += 10;
-
-  const expectedPublisher = normalizeBookText(book.publisher || "");
-  const candidatePublisher = normalizeBookText(candidate.publisher || "");
-  if (
-    expectedPublisher &&
-    candidatePublisher &&
-    (expectedPublisher.includes(candidatePublisher) ||
-      candidatePublisher.includes(expectedPublisher))
-  ) {
-    score += 10;
-  }
-
-  if (
-    book.publicationYear &&
-    candidate.publicationDate?.startsWith(book.publicationYear)
-  ) {
-    score += 5;
-  }
-
-  return score;
-}
-
-function bestCoverMatch(
-  book: ShelfBook,
-  results: CatalogBookResult[],
-): CatalogBookResult | undefined {
-  return results
-    .filter((result) => Boolean(result.coverImageUrl))
-    .map((result) => ({ result, score: coverMatchScore(book, result) }))
-    .filter(({ score }) => score >= 80)
-    .sort((left, right) => right.score - left.score)[0]?.result;
-}
-
-function displayCoverScore(book: ShelfBook, candidate: CatalogBookResult) {
-  let score = coverMatchScore(book, candidate);
-  const provider = candidate.provider.toLowerCase();
-  const coverUrl = (candidate.coverImageUrl || "").toLowerCase();
-
-  // The shelf animation represents a bound volume, even when the reader owns
-  // an e-book or audiobook. Prefer a clean, front-facing physical edition for
-  // that visual while retaining the selected edition's metadata.
-  if (candidate.format === "PHYSICAL") score += 28;
-  if (provider.includes("google_books") || provider.includes("google books")) {
-    score += 14;
-  }
-  if (coverUrl.includes("books.google")) score += 10;
-  if (provider === "open_library" || provider === "open library") score -= 12;
-  if (coverUrl.includes("openlibrary") || coverUrl.includes("archive.org")) {
-    score -= 16;
-  }
-
-  return score;
-}
-
-function bestDisplayCoverMatch(
-  book: ShelfBook,
-  results: CatalogBookResult[],
-): CatalogBookResult | undefined {
-  return results
-    .filter((result) => Boolean(result.coverImageUrl))
-    .map((result) => ({ result, score: displayCoverScore(book, result) }))
-    .filter(({ score }) => score >= 80)
-    .sort((left, right) => right.score - left.score)[0]?.result;
-}
-
-function coverNeedsRefinement(book: ShelfBook) {
-  if (!book.coverUrl) return true;
-  const provider = (book.catalogProvider || "").toLowerCase();
-  const coverUrl = book.coverUrl.toLowerCase();
-
-  return (
-    provider.includes("open_library") ||
-    provider.includes("open library") ||
-    provider.includes("apple audiobook") ||
-    provider.includes("spotify audiobook") ||
-    coverUrl.includes("openlibrary") ||
-    coverUrl.includes("archive.org")
   );
 }
 
@@ -2116,46 +1987,6 @@ export default function BooksPage({
 
         setBooks(booksWithExperiences);
 
-        // Recover missing covers and replace scan-oriented catalog art with a
-        // clean, front-facing exact-title/author physical cover. Metadata for
-        // the reader's selected edition remains untouched.
-        for (const book of booksWithExperiences) {
-          if (!coverNeedsRefinement(book)) continue;
-
-          const backendBookId = Number(book.id);
-          if (!Number.isFinite(backendBookId) || backendBookId <= 0) continue;
-
-          try {
-            const results = await catalogApi.searchBooks(
-              book.title,
-              undefined,
-              "TITLE",
-            );
-            const match = book.coverUrl
-              ? bestDisplayCoverMatch(book, results)
-              : bestCoverMatch(book, results);
-            if (!match?.coverImageUrl) continue;
-            if (match.coverImageUrl === book.coverUrl) continue;
-
-            const recoveredBook = {
-              ...book,
-              coverUrl: match.coverImageUrl,
-            };
-
-            await bookApi.update(
-              backendBookId,
-              mapShelfBookToBackendBook(recoveredBook),
-            );
-
-            setBooks((currentBooks) =>
-              currentBooks.map((currentBook) =>
-                currentBook.id === book.id ? recoveredBook : currentBook,
-              ),
-            );
-          } catch (error) {
-            console.warn("Could not recover cover for", book.title, error);
-          }
-        }
       } catch (error) {
         console.error("Failed to load books from API", error);
         setBooks([]);
