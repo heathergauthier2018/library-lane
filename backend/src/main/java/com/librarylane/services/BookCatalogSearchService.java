@@ -319,27 +319,60 @@ public class BookCatalogSearchService {
         Set<CatalogBookResult> promoted =
                 java.util.Collections.newSetFromMap(
                         new java.util.IdentityHashMap<>());
-        Set<String> canonicalSeriesAuthors = ranked.stream()
+        Set<String> detectedSeriesAuthors = ranked.stream()
                 .filter(result -> seriesMatchesQuery(result, cleanedQuery))
                 .flatMap(result -> safe(result.authors()).stream())
                 .map(BookCatalogSearchService::canonicalPerson)
                 .filter(value -> !value.isBlank())
                 .collect(java.util.stream.Collectors.toCollection(
                         java.util.LinkedHashSet::new));
-        Set<String> canonicalWorkAuthors = ranked.stream()
+
+        CatalogBookResult canonicalWork = ranked.stream()
                 .filter(result -> !isAudiobookFormat(result.format()))
                 .filter(result -> !looksLikeAncillaryRecord(result))
-                .filter(result -> queryFamilyTitleMatch(
+                .filter(result -> strongWorkTitleMatch(
                         result,
-                        cleanedQuery)
-                        || strongWorkTitleMatch(result, cleanedQuery))
+                        cleanedQuery))
                 .findFirst()
-                .stream()
-                .flatMap(result -> safe(result.authors()).stream())
-                .map(BookCatalogSearchService::canonicalPerson)
-                .filter(value -> !value.isBlank())
-                .collect(java.util.stream.Collectors.toCollection(
-                        java.util.LinkedHashSet::new));
+                .orElseGet(() -> ranked.stream()
+                        .filter(result ->
+                                !isAudiobookFormat(result.format()))
+                        .filter(result ->
+                                !looksLikeAncillaryRecord(result))
+                        .filter(result -> queryFamilyTitleMatch(
+                                result,
+                                cleanedQuery))
+                        .findFirst()
+                        .orElse(null));
+
+        Set<String> canonicalWorkAuthors = canonicalWork == null
+                ? Set.of()
+                : safe(canonicalWork.authors()).stream()
+                  .map(BookCatalogSearchService::canonicalPerson)
+                  .filter(value -> !value.isBlank())
+                  .collect(java.util.stream.Collectors.toCollection(
+                          java.util.LinkedHashSet::new));
+
+        long exactWorkFormatCount = ranked.stream()
+                .filter(result -> belongsToAuthorFamily(
+                        result,
+                        canonicalWorkAuthors))
+                .filter(result -> strongWorkTitleMatch(
+                        result,
+                        cleanedQuery))
+                .map(result -> safeTitle(result.format()).toUpperCase(
+                        Locale.ROOT))
+                .filter(value -> Set.of(
+                        "PHYSICAL",
+                        "EBOOK",
+                        "AUDIOBOOK").contains(value))
+                .distinct()
+                .count();
+
+        Set<String> canonicalSeriesAuthors =
+                exactWorkFormatCount >= 2
+                        ? Set.of()
+                        : detectedSeriesAuthors;
 
         for (String format : List.of("PHYSICAL", "EBOOK", "AUDIOBOOK")) {
             CatalogBookResult lead = canonicalSeriesAuthors.isEmpty()
@@ -1496,7 +1529,12 @@ public class BookCatalogSearchService {
 
     private static boolean looksLikeAncillaryWork(String value) {
         String title = normalize(value);
-        return title.contains(" book analysis")
+        return title.contains(" word search")
+                || title.contains(" coloring book")
+                || title.contains(" activity book")
+                || title.contains(" canvas bag")
+                || title.contains(" tote bag")
+                || title.contains(" book analysis")
                 || title.contains(" book summary")
                 || title.contains(" teacher guide")
                 || title.contains(" teacher s guide")

@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -319,6 +320,94 @@ class BookCatalogCombinedFormatSearchTest {
                         .orElseThrow()
                         .authors()
                         .getFirst());
+    }
+
+    @Test
+    void exactWorkAuthorBeatsAnUnrelatedInferredSeries() {
+        CatalogBookResult exactPhysical = resultWithMetadata(
+                "Open Library",
+                "fourth-wing-print",
+                "Fourth Wing",
+                "Rebecca Yarros",
+                null,
+                "PHYSICAL");
+        CatalogBookResult unrelatedSeries = resultWithMetadata(
+                "Google Books",
+                "dragon-academy",
+                "The Fourth Wing The Dragon Academy",
+                "Kelly Emberfall",
+                "Fourth Wing",
+                "EBOOK");
+        CatalogBookResult exactEbook = resultWithMetadata(
+                "Google Books",
+                "fourth-wing-ebook",
+                "Fourth Wing",
+                "Rebecca Yarros",
+                null,
+                "EBOOK");
+        CatalogBookResult wordSearch = resultWithMetadata(
+                "Google Books",
+                "word-search",
+                "Fourth Wing: The Official Word Search Book",
+                "Entangled",
+                null,
+                "PHYSICAL");
+        CatalogBookResult canvasBag = resultWithMetadata(
+                "Google Books",
+                "canvas-bag",
+                "Fourth Wing Shadows of Navarre Canvas Bag",
+                "Paperblanks",
+                null,
+                "PHYSICAL");
+        CatalogBookResult exactAudiobook = resultWithMetadata(
+                "Apple Audiobooks",
+                "fourth-wing-audio",
+                "Fourth Wing (Empyrean)",
+                "Rebecca Yarros",
+                "The Empyrean",
+                "AUDIOBOOK");
+
+        when(openLibrary.search("Fourth Wing", null, "TITLE"))
+                .thenReturn(List.of(exactPhysical));
+        when(googleBooks.search("Fourth Wing", null, "TITLE"))
+                .thenReturn(List.of(
+                        unrelatedSeries,
+                        exactEbook,
+                        wordSearch,
+                        canvasBag));
+        when(googleBooks.search("Fourth Wing", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(appleAudiobooks.search(
+                "Fourth Wing",
+                "AUDIOBOOK",
+                "TITLE"))
+                .thenReturn(List.of(exactAudiobook));
+
+        List<CatalogBookResult> results = service.search(
+                "Fourth Wing",
+                null,
+                "TITLE");
+
+        assertEquals(
+                List.of("PHYSICAL", "EBOOK", "AUDIOBOOK"),
+                results.stream()
+                        .limit(3)
+                        .map(CatalogBookResult::format)
+                        .toList());
+        assertEquals(
+                List.of(
+                        "Rebecca Yarros",
+                        "Rebecca Yarros",
+                        "Rebecca Yarros"),
+                results.stream()
+                        .limit(3)
+                        .map(result -> result.authors().getFirst())
+                        .toList());
+        assertFalse(results.stream().anyMatch(result -> {
+            String title = result.title().toLowerCase();
+            return title.contains("word search")
+                    || title.contains("canvas bag");
+        }));
     }
 
     @Test
