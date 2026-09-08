@@ -333,6 +333,7 @@ public class BookCatalogSearchService {
                 .filter(result -> strongWorkTitleMatch(
                         result,
                         cleanedQuery))
+                .sorted(leadPreference(cleanedQuery))
                 .findFirst()
                 .orElseGet(() -> ranked.stream()
                         .filter(result ->
@@ -342,6 +343,7 @@ public class BookCatalogSearchService {
                         .filter(result -> queryFamilyTitleMatch(
                                 result,
                                 cleanedQuery))
+                        .sorted(leadPreference(cleanedQuery))
                         .findFirst()
                         .orElse(null));
 
@@ -386,6 +388,7 @@ public class BookCatalogSearchService {
                       .filter(result -> queryFamilyTitleMatch(
                               result,
                               cleanedQuery))
+                      .sorted(leadPreference(cleanedQuery))
                       .findFirst()
                       .orElse(null);
 
@@ -402,6 +405,7 @@ public class BookCatalogSearchService {
                                 || strongWorkTitleMatch(
                                 result,
                                 cleanedQuery))
+                        .sorted(leadPreference(cleanedQuery))
                         .findFirst()
                         .orElse(null);
             }
@@ -412,6 +416,7 @@ public class BookCatalogSearchService {
                         .filter(result -> queryFamilyTitleMatch(
                                 result,
                                 cleanedQuery))
+                        .sorted(leadPreference(cleanedQuery))
                         .findFirst()
                         .orElse(null);
             }
@@ -441,7 +446,9 @@ public class BookCatalogSearchService {
                     .toList();
             for (CatalogBookResult result : seriesFamily) {
                 if (!promoted.contains(result)
-                        && belongsToAuthorFamily(result, canonicalSeriesAuthors)) {
+                        && belongsToAuthorFamily(
+                                result,
+                                canonicalSeriesAuthors)) {
                     prioritized.add(result);
                     promoted.add(result);
                 }
@@ -454,6 +461,27 @@ public class BookCatalogSearchService {
         return prioritized;
     }
 
+    private static Comparator<CatalogBookResult> leadPreference(
+            String cleanedQuery) {
+        return Comparator
+                .comparingInt((CatalogBookResult result) ->
+                        leadPreferenceScore(result, cleanedQuery))
+                .reversed();
+    }
+
+    private static int leadPreferenceScore(
+            CatalogBookResult result,
+            String cleanedQuery) {
+        int score = strongWorkTitleMatch(result, cleanedQuery) ? 100 : 0;
+
+        if (isEnglish(result.language())) {
+            score += 40;
+        } else if (!hasText(result.language())) {
+            score += 20;
+        }
+
+        return score;
+    }
     private static boolean hasStrongFormatMatch(
             Iterable<CatalogBookResult> results,
             String cleanedQuery,
@@ -1633,7 +1661,26 @@ public class BookCatalogSearchService {
     }
 
     private static String searchIdentity(CatalogBookResult result) {
-        return identity(result) + "|" + normalize(result.format());
+        String isbn13 = safeTitle(result.isbn13())
+                .replaceAll("[^0-9Xx]", "")
+                .toUpperCase(Locale.ROOT);
+        String isbn10 = safeTitle(result.isbn10())
+                .replaceAll("[^0-9Xx]", "")
+                .toUpperCase(Locale.ROOT);
+
+        String editionIdentity;
+        if (!isbn13.isBlank()) {
+            editionIdentity = "isbn13:" + isbn13;
+        } else if (!isbn10.isBlank()) {
+            editionIdentity = "isbn10:" + isbn10;
+        } else {
+            String language = normalize(result.language());
+            editionIdentity = language.isBlank()
+                    ? "language:unknown"
+                    : "language:" + language;
+        }
+
+        return identity(result) + "|" + editionIdentity;
     }
 
     private static CatalogBookResult merge(
@@ -1770,6 +1817,10 @@ public class BookCatalogSearchService {
                 || normalized.equals("chapter book")
                 || normalized.equals("bestselling")
                 || normalized.equals("best selling")
+                || normalized.equals("tv")
+                || normalized.equals("television")
+                || normalized.equals("film")
+                || normalized.equals("movie")
                 || normalized.contains("new york times")
                 || normalized.contains("bestselling chapter book")
                 || normalized.contains("best selling chapter book");
