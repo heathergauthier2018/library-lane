@@ -42,12 +42,12 @@ public class BookService {
 
     @Transactional(readOnly = true)
     public List<Book> getAllBooks() {
-        return bookRepository.findAll();
+        return prepareBooksForResponse(bookRepository.findAll());
     }
 
     @Transactional(readOnly = true)
     public Book getBookById(Long id) {
-        return findBookRowById(id);
+        return prepareBookForResponse(findBookRowById(id));
     }
 
     @Transactional
@@ -66,7 +66,7 @@ public class BookService {
         book.setGenres(resolveGenres(book.getGenres()));
         book.setAuthors(resolveAuthors(book.getAuthors()));
 
-        return bookRepository.save(book);
+        return prepareBookForResponse(bookRepository.save(book));
     }
 
     @Transactional
@@ -107,7 +107,7 @@ public class BookService {
         existingBook.setGenres(resolveGenres(updatedBook.getGenres()));
         existingBook.setAuthors(resolveAuthors(updatedBook.getAuthors()));
 
-        return bookRepository.save(existingBook);
+        return prepareBookForResponse(bookRepository.save(existingBook));
     }
 
     @Transactional
@@ -134,54 +134,69 @@ public class BookService {
 
     @Transactional(readOnly = true)
     public List<Book> searchBooksByTitle(String title) {
-        return bookRepository.findByTitleContainingIgnoreCase(title);
+        return prepareBooksForResponse(bookRepository.findByTitleContainingIgnoreCase(title));
     }
 
     @Transactional(readOnly = true)
     public List<Book> getWishlistBooks() {
-        return bookRepository.findByWishlistTrue();
+        return prepareBooksForResponse(bookRepository.findByWishlistTrue());
     }
 
     @Transactional(readOnly = true)
     public List<Book> getTbrBooks() {
-        return bookRepository.findByOwnedTrueAndCurrentStatus(ReadingStatus.TBR);
+        return prepareBooksForResponse(bookRepository.findByOwnedTrueAndCurrentStatus(ReadingStatus.TBR));
     }
 
     @Transactional(readOnly = true)
     public List<Book> getCurrentlyReadingBooks() {
-        return bookRepository.findByCurrentStatus(ReadingStatus.CURRENTLY_READING);
+        return prepareBooksForResponse(bookRepository.findByCurrentStatus(ReadingStatus.CURRENTLY_READING));
     }
 
     @Transactional(readOnly = true)
     public List<Book> getCompletedBooks() {
-        return bookRepository.findByCurrentStatus(ReadingStatus.COMPLETED);
+        return prepareBooksForResponse(bookRepository.findByCurrentStatus(ReadingStatus.COMPLETED));
     }
 
     @Transactional(readOnly = true)
     public List<Book> getDnfBooks() {
-        return bookRepository.findByDnfTrue();
+        return prepareBooksForResponse(bookRepository.findByDnfTrue());
     }
 
     @Transactional(readOnly = true)
     public List<Book> getPausedBooks() {
-        return bookRepository.findByCurrentStatus(ReadingStatus.PAUSED);
+        return prepareBooksForResponse(bookRepository.findByCurrentStatus(ReadingStatus.PAUSED));
     }
 
     @Transactional(readOnly = true)
     public List<Book> getFavoriteBooks() {
-        return bookRepository.findByFavoriteTrue();
+        return prepareBooksForResponse(bookRepository.findByFavoriteTrue());
     }
 
     @Transactional(readOnly = true)
     public List<Book> getOwnedBooks() {
-        return bookRepository.findByOwnedTrue();
+        return prepareBooksForResponse(bookRepository.findByOwnedTrue());
     }
 
     @Transactional(readOnly = true)
     public List<Book> getBooksByGenre(String genreName) {
-        return bookRepository.findByGenresNameIgnoreCase(genreName);
+        return prepareBooksForResponse(bookRepository.findByGenresNameIgnoreCase(genreName));
     }
 
+    private List<Book> prepareBooksForResponse(List<Book> books) {
+        books.forEach(this::prepareBookForResponse);
+        return books;
+    }
+
+    private Book prepareBookForResponse(Book book) {
+        book.getAuthors().size();
+        book.getGenres().size();
+        book.getReadingExperiences().size();
+        book.getReadingExperiences().forEach(
+                experience -> experience.getJournalEntries().size()
+        );
+
+        return book;
+    }
     @SuppressWarnings("unchecked")
     private Book findBookRowById(Long id) {
         List<Book> matches = entityManager.createNativeQuery(
