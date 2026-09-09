@@ -89,6 +89,46 @@ class BookCatalogSearchServiceTest {
     }
 
     @Test
+    void exactIsbnEditionCanFillAMissingPhysicalPageCount() {
+        CatalogBookResult selected = new CatalogBookResult(
+                "GOOGLE_BOOKS",
+                "google-fourth-wing",
+                "Fourth Wing",
+                null,
+                List.of("Rebecca Yarros"),
+                List.of("Fantasy"),
+                "A fantasy novel.",
+                "Entangled: Red Tower Books",
+                "2023",
+                null,
+                null,
+                List.of(),
+                "https://example.com/fourth-wing.jpg",
+                "en",
+                null,
+                "9781649374042",
+                "The Empyrean",
+                1.0,
+                "Physical edition",
+                "PHYSICAL");
+
+        when(openLibrary.findWorkByIsbn("9781649374042"))
+                .thenReturn(null);
+        when(openLibrary.findPageCountByIsbn("9781649374042"))
+                .thenReturn(517);
+        when(googleBooks.search(
+                "Fourth Wing",
+                "PHYSICAL",
+                "TITLE"))
+                .thenReturn(List.of());
+
+        CatalogBookResult resolved = service.resolve(selected);
+
+        assertEquals(517, resolved.pageCount());
+        assertEquals("9781649374042", resolved.isbn13());
+        assertEquals("PHYSICAL", resolved.format());
+    }
+    @Test
     void numberedTitleInfersSeriesNameAndBookNumberWithoutHardCoding() {
         CatalogBookResult numberedTitle = printResult(
                 "Magic Tree House 1: Valley of the Dinosaurs",

@@ -636,6 +636,22 @@ public class BookCatalogSearchService {
             System.err.println("Open Library work resolution failed: " + error.getMessage());
         }
 
+        if ("PHYSICAL".equalsIgnoreCase(
+                safeTitle(selectedResult.format()))
+                && selectedResult.pageCount() == null) {
+            String selectedIsbn = hasText(selectedResult.isbn13())
+                    ? selectedResult.isbn13()
+                    : selectedResult.isbn10();
+            if (hasText(selectedIsbn)) {
+                Integer exactEditionPages =
+                        openLibrary.findPageCountByIsbn(selectedIsbn);
+                if (exactEditionPages != null) {
+                    resolved = withPageCount(
+                            resolved,
+                            exactEditionPages);
+                }
+            }
+        }
         try {
             CatalogBookResult current = resolved;
             CatalogBookResult supplement = googleBooks.search(
@@ -2128,6 +2144,32 @@ public class BookCatalogSearchService {
         return display.toString();
     }
 
+    private static CatalogBookResult withPageCount(
+            CatalogBookResult result,
+            Integer pageCount) {
+        return new CatalogBookResult(
+                result.provider(),
+                result.providerId(),
+                result.title(),
+                result.subtitle(),
+                result.authors(),
+                result.genres(),
+                result.description(),
+                result.publisher(),
+                result.publicationDate(),
+                pageCount,
+                result.audiobookLengthSeconds(),
+                result.narrators(),
+                result.coverImageUrl(),
+                result.language(),
+                result.isbn10(),
+                result.isbn13(),
+                result.seriesName(),
+                result.seriesNumber(),
+                result.editionFormat(),
+                result.format()
+        );
+    }
     private static CatalogBookResult mergeSelectedWithWork(
             CatalogBookResult selected,
             CatalogBookResult work) {
