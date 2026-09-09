@@ -26,6 +26,13 @@ public class BookCatalogSearchService {
     private static final Pattern NUMERIC_ORDINAL_SERIES_NUMBER = Pattern.compile(
             "(?i)\\b(\\d+)(?:st|nd|rd|th)\\s+"
                     + "(?:book|novel|audiobook|volume|installment|entry)\\b");
+
+    private static final Pattern NUMERIC_ORDINAL_IN_SERIES =
+            Pattern.compile(
+                    "(?i)\\b(\\d+)(?:st|nd|rd|th)\\s+"
+                            + "(?:book|novel|audiobook|volume|installment|entry)\\s+"
+                            + "(?:of|in)\\s+(?:the\\s+)?"
+                            + "[^.!?]{1,80}\\b(?:series|trilogy)\\b");
     private static final Pattern ORDINAL_IN_SERIES = Pattern.compile(
             "(?i)\\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)"
                     + "(?:\\s+and\\s+final)?\\s+"
@@ -961,16 +968,88 @@ public class BookCatalogSearchService {
     private static Double inferSeriesNumber(
             CatalogBookResult selected,
             Iterable<CatalogBookResult> supplements) {
-        Double inferred = parseStrongSeriesNumber(metadataEvidence(selected));
+        Double inferred = parseStrongSeriesNumber(
+                structuredSeriesEvidence(selected));
+        if (inferred != null) return inferred;
+
+        inferred = seriesNumberAssociatedWithTitle(selected);
+        if (inferred != null) return inferred;
+
+        inferred = parseContextualDescriptionSeriesNumber(
+                selected.description());
         if (inferred != null) return inferred;
 
         for (CatalogBookResult supplement : supplements) {
-            inferred = parseStrongSeriesNumber(metadataEvidence(supplement));
+            inferred = parseStrongSeriesNumber(
+                    structuredSeriesEvidence(supplement));
+            if (inferred != null) return inferred;
+
+            inferred = seriesNumberAssociatedWithTitle(supplement);
+            if (inferred != null) return inferred;
+
+            inferred = parseContextualDescriptionSeriesNumber(
+                    supplement.description());
             if (inferred != null) return inferred;
         }
         return null;
     }
 
+    private static String structuredSeriesEvidence(
+            CatalogBookResult result) {
+        return String.join(
+                " ",
+                safeTitle(result.title()),
+                safeTitle(result.subtitle()),
+                safeTitle(result.seriesName()),
+                safeTitle(result.editionFormat()));
+    }
+
+    private static Double seriesNumberAssociatedWithTitle(
+            CatalogBookResult result) {
+        String title = canonicalSearchTitle(result.title());
+        String description = normalize(result.description());
+        if (title.isBlank() || description.isBlank()) return null;
+
+        Matcher numberBeforeTitle = Pattern.compile(
+                "(?i)\\bbook\\s*#?\\s*(\\d+(?:\\.\\d+)?)\\s+"
+                        + Pattern.quote(title)
+                        + "\\b")
+                .matcher(description);
+        if (numberBeforeTitle.find()) {
+            return parseNumber(numberBeforeTitle.group(1));
+        }
+
+        Matcher titleBeforeNumber = Pattern.compile(
+                "(?i)\\b"
+                        + Pattern.quote(title)
+                        + "\\s*(?:\\(|-|,|:)??\\s*"
+                        + "(?:book|volume|vol\\.?|part)\\s*#?\\s*"
+                        + "(\\d+(?:\\.\\d+)?)\\b")
+                .matcher(description);
+        if (titleBeforeNumber.find()) {
+            return parseNumber(titleBeforeNumber.group(1));
+        }
+
+        return null;
+    }
+
+    private static Double parseContextualDescriptionSeriesNumber(
+            String description) {
+        String evidence = safeTitle(description);
+
+        Matcher numericOrdinal =
+                NUMERIC_ORDINAL_IN_SERIES.matcher(evidence);
+        if (numericOrdinal.find()) {
+            return parseNumber(numericOrdinal.group(1));
+        }
+
+        Matcher ordinalInSeries = ORDINAL_IN_SERIES.matcher(evidence);
+        if (ordinalInSeries.find()) {
+            return numberWord(ordinalInSeries.group(1));
+        }
+
+        return null;
+    }
     private static Double discoverAudiobookSeriesNumber(
             CatalogBookResult selected,
             Iterable<CatalogBookResult> supplements) {
@@ -983,56 +1062,32 @@ public class BookCatalogSearchService {
                     .add(publicationProviderFamily(supplement.provider()));
         }
 
-        // Structured agreement from independent work catalogs is stronger
-        // than a storefront value that may have been inferred from marketing
-        // copy (for example “#1 bestseller”).
+        // Agreement from independent work catalogs is the strongest evidence.
         Double consensus = sources.entrySet().stream()
                 .filter(entry -> entry.getValue().size() >= 2)
-                .max(Comparator.comparingInt(entry -> entry.getValue().size()))
+                .max(Comparator.comparingInt(
+                        entry -> entry.getValue().size()))
                 .map(Map.Entry::getKey)
                 .orElse(null);
         if (consensus != null) return consensus;
 
-        // Prefer an explicit number found in independently retrieved work
-        // metadata. The selected storefront record is deliberately checked
-        // later because audiobook descriptions often contain unrelated
-        // promotional phrases such as “#1 bestseller.”
-        for (CatalogBookResult supplement : supplements) {
-            Double stronglyInferred =
-                    parseStrongSeriesNumber(metadataEvidence(supplement));
-            if (stronglyInferred != null) return stronglyInferred;
-        }
+        // Use only structured fields, a number paired with this exact title,
+        // or contextual wording tied directly to a named series. This avoids
+        // taking Book #1 from a general reading-order list while resolving a
+        // later volume.
+        Double safelyInferred = inferSeriesNumber(
+                selected,
+                supplements);
+        if (safelyInferred != null) return safelyInferred;
 
+        // A single structured work-catalog value is useful when there is no
+        // conflicting provider evidence.
         if (sources.size() == 1) {
             return sources.keySet().iterator().next();
         }
 
-        // An explicit sentence in the selected audiobook metadata remains
-        // useful when the storefront did not supply a structured number.
-        // Examples include “the third audiobook in the … series” and “the
-        // first book in the … series.” The strong parser deliberately rejects
-        // bestseller rankings and other promotional uses of “#1.”
-        Double supported =
-                parseStrongSeriesNumber(metadataEvidence(selected));
-        if (selected.seriesNumber() == null && supported != null) {
-            return supported;
-        }
-
-        // Keep an existing structured storefront value only when no stronger
-        // exact-work evidence contradicts it and the storefront's own explicit
-        // evidence supports that same number.
-        if (selected.seriesNumber() != null
-                && sources.isEmpty()) {
-            if (selected.seriesNumber().equals(supported)) {
-                return selected.seriesNumber();
-            }
-        } else if (selected.seriesNumber() != null
-                && sources.containsKey(selected.seriesNumber())) {
-            return selected.seriesNumber();
-        }
         return null;
     }
-
     /**
      * Derives a missing volume number from the original publication order of
      * matching-author titles in the verified series. At least two distinct
@@ -1724,7 +1779,15 @@ public class BookCatalogSearchService {
             seriesNumber = inferredSeries.number();
         }
         if (seriesNumber == null && hasText(seriesName)) {
-            seriesNumber = parseStrongSeriesNumber(metadataEvidence(result));
+            seriesNumber = parseStrongSeriesNumber(
+                    structuredSeriesEvidence(result));
+        }
+        if (seriesNumber == null && hasText(seriesName)) {
+            seriesNumber = seriesNumberAssociatedWithTitle(result);
+        }
+        if (seriesNumber == null && hasText(seriesName)) {
+            seriesNumber = parseContextualDescriptionSeriesNumber(
+                    result.description());
         }
 
         return new CatalogBookResult(

@@ -501,7 +501,7 @@ class BookCatalogCombinedFormatSearchTest {
                 "Rebecca Yarros",
                 null,
                 "en",
-                "A television series is in development.",
+                "A #1 New York Times bestseller. A television series is in development.",
                 "EBOOK");
 
         when(openLibrary.search("Iron Flame", null, "TITLE"))
@@ -522,6 +522,38 @@ class BookCatalogCombinedFormatSearchTest {
                 "TITLE");
 
         assertFalse(results.getFirst().seriesName() != null);
+        assertFalse(results.getFirst().seriesNumber() != null);
+    }
+    @Test
+    void readingOrderUsesNumberAssociatedWithCurrentTitle() {
+        CatalogBookResult ironFlame = resultWithLanguageAndDescription(
+                "Google Books",
+                "iron-reading-order",
+                "Iron Flame",
+                "Rebecca Yarros",
+                "The Empyrean",
+                "en",
+                "Reading Order: Book #1 Fourth Wing, Book #2 Iron Flame, Book #3 Onyx Storm.",
+                "EBOOK");
+
+        when(openLibrary.search("Iron Flame", null, "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search("Iron Flame", null, "TITLE"))
+                .thenReturn(List.of(ironFlame));
+        when(googleBooks.search("Iron Flame", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(appleAudiobooks.search(
+                "Iron Flame",
+                "AUDIOBOOK",
+                "TITLE"))
+                .thenReturn(List.of());
+
+        List<CatalogBookResult> results = service.search(
+                "Iron Flame",
+                null,
+                "TITLE");
+
+        assertEquals(2.0, results.getFirst().seriesNumber());
     }
     @Test
     void appleFailureDoesNotRemoveExistingBookResults() {
