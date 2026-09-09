@@ -493,6 +493,58 @@ class BookCatalogSearchServiceTest {
     }
 
     @Test
+    void wikidataCanImproveAnEquivalentAudiobookSeriesName() {
+        CatalogBookResult selected = audiobookResult(
+                "Fourth Wing (Empyrean)",
+                "apple-fourth-wing-wikidata",
+                "Yarros' Empyrean",
+                1.0);
+        CatalogBookResult wikidataWork = printResult(
+                "Fourth Wing",
+                "Rebecca Yarros",
+                "The first book in The Empyrean series.",
+                "The Empyrean",
+                1.0);
+
+        when(openLibrary.search("Fourth Wing", null, "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search("Fourth Wing", null, "TITLE"))
+                .thenReturn(List.of());
+        when(wikidata.enrich(
+                org.mockito.ArgumentMatchers.any(
+                        CatalogBookResult.class)))
+                .thenReturn(wikidataWork);
+
+        CatalogBookResult resolved = service.resolve(selected);
+
+        assertEquals("The Empyrean", resolved.seriesName());
+        assertEquals(1.0, resolved.seriesNumber());
+    }
+    @Test
+    void independentlySupportedSeriesNameReplacesStorefrontAttribution() {
+        CatalogBookResult selected = audiobookResult(
+                "Fourth Wing (Empyrean)",
+                "apple-fourth-wing",
+                "Yarros' Empyrean",
+                1.0);
+        CatalogBookResult work = printResult(
+                "Fourth Wing",
+                "Rebecca Yarros",
+                "The first book in The Empyrean series.",
+                "Yarros' Empyrean",
+                1.0);
+
+        when(openLibrary.search("Fourth Wing", null, "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search("Fourth Wing", null, "TITLE"))
+                .thenReturn(List.of(work));
+
+        CatalogBookResult resolved = service.resolve(selected);
+
+        assertEquals("The Empyrean", resolved.seriesName());
+        assertEquals(1.0, resolved.seriesNumber());
+    }
+    @Test
     void appleParentheticalSeriesNumberUsesCleanWorkTitle() {
         CatalogBookResult selected = new CatalogBookResult(
                 "Apple Audiobooks",

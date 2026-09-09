@@ -47,7 +47,8 @@ public class BookCatalogSearchService {
             "(?i)\\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)"
                     + "(?:\\s+and\\s+final)?\\s+"
                     + "(?:(?:book|novel|audiobook|installment|entry)\\s+)?"
-                    + "(?:in|of)\\s+(?:the\\s+)?"
+                    + "(?:in|of)\\s+"
+                    + "(?:(the)\\s+)?"
                     + "(?:#\\s*1\\s+)?"
                     + "([\\p{L}\\p{N}][\\p{L}\\p{N}'’&: -]{1,70}?)\\s+"
                     + "(?:series|trilogy)\\b");
@@ -678,9 +679,9 @@ public class BookCatalogSearchService {
             String publicationDate = trustworthyEarlierWorkDate(
                     audiobook.publicationDate(),
                     enriched.publicationDate());
-            String seriesName = prefer(
-                    displaySeriesName(audiobook.seriesName()),
-                    displaySeriesName(enriched.seriesName()));
+            String seriesName = discoverAudiobookSeriesName(
+                    audiobook,
+                    List.of(enriched));
             Double seriesNumber = audiobook.seriesNumber() != null
                     ? audiobook.seriesNumber() : enriched.seriesNumber();
 
@@ -760,7 +761,7 @@ public class BookCatalogSearchService {
                 enrichedWorks.values());
         String discoveredSeriesName = discoverAudiobookSeriesName(
                 selected,
-                enrichedWorks.values());
+                matchedSupplements);
         if (discoveredSeriesNumber == null
                 && hasText(discoveredSeriesName)) {
             discoveredSeriesNumber = inferSeriesPositionFromCatalog(
@@ -928,32 +929,47 @@ public class BookCatalogSearchService {
     private static String discoverAudiobookSeriesName(
             CatalogBookResult selected,
             Iterable<CatalogBookResult> supplements) {
-        String selectedEvidence = preferredAudiobookSeries(
-                selected,
-                inferAudiobookSeriesName(selected));
-        if (hasText(selectedEvidence)) return selectedEvidence;
-
         Map<String, SeriesCandidate> candidates = new LinkedHashMap<>();
-        for (CatalogBookResult supplement : supplements) {
-            String name = preferredAudiobookSeries(
-                    selected,
-                    prefer(
-                            supplement.seriesName(),
-                            inferAudiobookSeriesName(supplement)));
-            if (!hasText(name)) continue;
 
-            String key = canonicalSeries(name);
-            if (key.isBlank()) continue;
-            String provider = publicationProviderFamily(supplement.provider());
-            candidates.compute(key, (ignored, existing) -> {
-                if (existing == null) {
-                    SeriesCandidate created = new SeriesCandidate(name);
-                    created.providers().add(provider);
-                    return created;
-                }
-                existing.providers().add(provider);
-                return existing;
-            });
+        String selectedName = cleanAudiobookSeriesAttribution(
+                prefer(
+                        selected.seriesName(),
+                        seriesNameFromAudiobookTitle(selected.title())),
+                selected.authors());
+        addSeriesCandidate(
+                candidates,
+                selectedName,
+                publicationProviderFamily(selected.provider()));
+
+        String selectedInference = cleanAudiobookSeriesAttribution(
+                inferAudiobookSeriesName(selected),
+                selected.authors());
+        addSeriesCandidate(
+                candidates,
+                selectedInference,
+                publicationProviderFamily(selected.provider()));
+
+        for (CatalogBookResult supplement : supplements) {
+            String provider =
+                    publicationProviderFamily(supplement.provider());
+
+            String structuredName = cleanAudiobookSeriesAttribution(
+                    supplement.seriesName(),
+                    selected.authors());
+            addSeriesCandidate(
+                    candidates,
+                    structuredName,
+                    provider);
+
+            // Descriptive evidence may preserve the official article or full
+            // series wording that a storefront's abbreviated label omitted.
+            String inferredName = cleanAudiobookSeriesAttribution(
+                    inferAudiobookSeriesName(supplement),
+                    selected.authors());
+            addSeriesCandidate(
+                    candidates,
+                    inferredName,
+                    provider);
         }
 
         return candidates.values().stream()
@@ -964,7 +980,28 @@ public class BookCatalogSearchService {
                 .map(SeriesCandidate::name)
                 .orElse(null);
     }
+    private static void addSeriesCandidate(
+            Map<String, SeriesCandidate> candidates,
+            String name,
+            String provider) {
+        if (!hasText(name)) return;
 
+        String key = canonicalSeries(name);
+        if (key.isBlank()) return;
+
+        candidates.compute(key, (ignored, existing) -> {
+            SeriesCandidate preferred = existing;
+            if (preferred == null
+                    || name.length() > preferred.name().length()) {
+                preferred = new SeriesCandidate(name);
+                if (existing != null) {
+                    preferred.providers().addAll(existing.providers());
+                }
+            }
+            preferred.providers().add(provider);
+            return preferred;
+        });
+    }
     private static Double inferSeriesNumber(
             CatalogBookResult selected,
             Iterable<CatalogBookResult> supplements) {
@@ -1232,47 +1269,68 @@ public class BookCatalogSearchService {
     private static String preferredAudiobookSeries(
             CatalogBookResult audiobook,
             String supplementalSeries) {
-        String selectedSeries = displaySeriesName(audiobook.seriesName());
+        String selectedSeries = cleanAudiobookSeriesAttribution(
+                audiobook.seriesName(),
+                audiobook.authors());
         if (hasText(selectedSeries)) return selectedSeries;
 
-        String titleSeries = displaySeriesName(
-                seriesNameFromAudiobookTitle(audiobook.title()));
+        String titleSeries = cleanAudiobookSeriesAttribution(
+                seriesNameFromAudiobookTitle(audiobook.title()),
+                audiobook.authors());
         if (hasText(titleSeries)) return titleSeries;
 
-        supplementalSeries = displaySeriesName(supplementalSeries);
-        if (!hasText(supplementalSeries)) return supplementalSeries;
+        return cleanAudiobookSeriesAttribution(
+                supplementalSeries,
+                audiobook.authors());
+    }
 
-        String cleaned = supplementalSeries.trim();
-        for (String author : safe(audiobook.authors())) {
+    private static String cleanAudiobookSeriesAttribution(
+            String value,
+            List<String> authors) {
+        String cleaned = displaySeriesName(value);
+        if (!hasText(cleaned)) return cleaned;
+
+        for (String author : safe(authors)) {
             String[] nameParts = safeTitle(author).split("\\s+");
             if (nameParts.length == 0) continue;
+
             String surname = nameParts[nameParts.length - 1];
             if (surname.length() < 2) continue;
 
-            String prefix = surname + " ";
-            if (cleaned.regionMatches(true, 0, prefix, 0, prefix.length())) {
-                String withoutSurname = cleaned.substring(prefix.length()).trim();
-                if (!withoutSurname.isBlank()) return withoutSurname;
-            }
+            // Accept both common possessive forms:
+            // Yarros' Empyrean and Tolkien's Middle-earth.
+            cleaned = cleaned.replaceFirst(
+                    "(?i)^" + Pattern.quote(surname)
+                            + "(?:['’]s|['’])?\\s+",
+                    "").trim();
         }
-        return cleaned;
-    }
 
-    private static String inferAudiobookSeriesName(CatalogBookResult result) {
+        return displaySeriesName(cleaned);
+    }
+    private static String inferAudiobookSeriesName(
+            CatalogBookResult result) {
         String evidence = metadataEvidence(result);
         Matcher explicit = EXPLICIT_NAMED_SERIES.matcher(evidence);
         if (explicit.find()) {
-            return cleanInferredSeriesName(explicit.group(1), result.authors());
+            String article = explicit.group(1);
+            String name = explicit.group(2);
+            // A capitalized "The" can be part of the official series name.
+            // Lowercase "the" is ordinary sentence grammar and is discarded.
+            String fullName = "The".equals(article)
+                    ? article + " " + name
+                    : name;
+            return cleanInferredSeriesName(
+                    fullName,
+                    result.authors());
         }
 
         return null;
     }
-
     private static String cleanInferredSeriesName(
             String candidate,
             List<String> authors) {
         String cleaned = safeTitle(candidate)
-                .replaceFirst("(?i)^the\\s+", "")
+
                 .replaceFirst("(?i)\\s+(?:book|novel|audiobook)$", "")
                 .trim();
 
