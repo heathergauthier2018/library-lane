@@ -227,6 +227,12 @@ public class BookCatalogSearchService {
             }
         }
 
+        Set<String> dominantTitleAuthors = dominantTitleAuthors(
+                combined,
+                cleanedQuery,
+                searchBy,
+                format);
+
         Map<String, CatalogBookResult> unique = new LinkedHashMap<>();
         combined.stream()
                 .map(BookCatalogSearchService::cleanMetadata)
@@ -239,7 +245,9 @@ public class BookCatalogSearchService {
                         searchBy))
                 .sorted(Comparator
                         .comparingInt((CatalogBookResult result) ->
-                                relevance(result, cleanedQuery, searchBy))
+                                relevance(result, cleanedQuery, searchBy)
+                                        + authorConsensusPreference(
+                                                result, dominantTitleAuthors))
                         .reversed()
                         .thenComparingInt(BookCatalogSearchService::languageSortRank)
                         .thenComparing(CatalogBookResult::title, String.CASE_INSENSITIVE_ORDER))
@@ -512,6 +520,62 @@ public class BookCatalogSearchService {
         return false;
     }
 
+    private static Set<String> dominantTitleAuthors(
+            Iterable<CatalogBookResult> results,
+            String cleanedQuery,
+            String rawSearchBy,
+            String requestedFormat) {
+        if (!"TITLE".equals(normalizeSearchBy(rawSearchBy))) {
+            return Set.of();
+        }
+
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (CatalogBookResult rawResult : results) {
+            CatalogBookResult result = cleanMetadata(rawResult);
+            if (hasText(requestedFormat)
+                    && !normalize(requestedFormat).equals(
+                    normalize(result.format()))) {
+                continue;
+            }
+            if (!matchesRequestedField(
+                    result, cleanedQuery, rawSearchBy)
+                    || !shouldShowSingleWorkResult(
+                    result, cleanedQuery, rawSearchBy)
+                    || !strongWorkTitleMatch(result, cleanedQuery)) {
+                continue;
+            }
+
+            safe(result.authors()).stream()
+                    .map(BookCatalogSearchService::canonicalPerson)
+                    .filter(value -> !value.isBlank())
+                    .distinct()
+                    .forEach(author -> counts.merge(
+                            author, 1, Integer::sum));
+        }
+
+        int strongestCount = counts.values().stream()
+                .mapToInt(Integer::intValue)
+                .max()
+                .orElse(0);
+        if (strongestCount < 2) return Set.of();
+
+        List<String> strongestAuthors = counts.entrySet().stream()
+                .filter(entry -> entry.getValue() == strongestCount)
+                .map(Map.Entry::getKey)
+                .toList();
+
+        return strongestAuthors.size() == 1
+                ? Set.of(strongestAuthors.getFirst())
+                : Set.of();
+    }
+
+    private static int authorConsensusPreference(
+            CatalogBookResult result,
+            Set<String> dominantAuthors) {
+        if (dominantAuthors.isEmpty()) return 0;
+        return belongsToAuthorFamily(result, dominantAuthors)
+                ? 200 : 0;
+    }
     private static boolean seriesMatchesQuery(
             CatalogBookResult result,
             String cleanedQuery) {

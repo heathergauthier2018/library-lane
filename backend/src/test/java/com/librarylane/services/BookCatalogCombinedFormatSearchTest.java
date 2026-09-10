@@ -606,8 +606,18 @@ class BookCatalogCombinedFormatSearchTest {
                 null,
                 "PHYSICAL");
 
+        CatalogBookResult wrongAuthor = resultWithLanguageAndDescription(
+                "Open Library",
+                "onyx-wrong-author",
+                "Onyx Storm",
+                "Prabhu Tl",
+                null,
+                "en",
+                null,
+                "PHYSICAL");
+
         when(openLibrary.search("Onyx Storm", "PHYSICAL", "TITLE"))
-                .thenReturn(List.of(turkish));
+                .thenReturn(List.of(wrongAuthor, turkish));
         when(googleBooks.search("Onyx Storm", "PHYSICAL", "TITLE"))
                 .thenReturn(List.of(english));
 
