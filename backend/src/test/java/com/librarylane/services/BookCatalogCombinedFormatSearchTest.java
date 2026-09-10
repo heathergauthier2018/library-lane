@@ -14,6 +14,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -584,6 +585,39 @@ class BookCatalogCombinedFormatSearchTest {
         assertEquals(Set.of("PHYSICAL", "EBOOK"), formats);
     }
 
+    @Test
+    void explicitPhysicalSearchPrefersEnglishButKeepsForeignEditions() {
+        CatalogBookResult turkish = resultWithLanguageAndDescription(
+                "Open Library",
+                "onyx-tr-explicit",
+                "Onyx Storm",
+                "Rebecca Yarros",
+                "The Empyrean",
+                "tr",
+                null,
+                "PHYSICAL");
+        CatalogBookResult english = resultWithLanguageAndDescription(
+                "Google Books",
+                "onyx-en-explicit",
+                "Onyx Storm",
+                "Rebecca Yarros",
+                null,
+                "en",
+                null,
+                "PHYSICAL");
+
+        when(openLibrary.search("Onyx Storm", "PHYSICAL", "TITLE"))
+                .thenReturn(List.of(turkish));
+        when(googleBooks.search("Onyx Storm", "PHYSICAL", "TITLE"))
+                .thenReturn(List.of(english));
+
+        List<CatalogBookResult> results =
+                service.search("Onyx Storm", "PHYSICAL", "TITLE");
+
+        assertEquals("onyx-en-explicit", results.getFirst().providerId());
+        assertTrue(results.stream().anyMatch(result ->
+                "onyx-tr-explicit".equals(result.providerId())));
+    }
     @Test
     void explicitPhysicalSearchRejectsMislabeledEbookResults() {
         CatalogBookResult physical = result(

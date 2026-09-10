@@ -241,6 +241,7 @@ public class BookCatalogSearchService {
                         .comparingInt((CatalogBookResult result) ->
                                 relevance(result, cleanedQuery, searchBy))
                         .reversed()
+                        .thenComparingInt(BookCatalogSearchService::languageSortRank)
                         .thenComparing(CatalogBookResult::title, String.CASE_INSENSITIVE_ORDER))
                 .forEach(result -> unique.merge(
                         searchIdentity(result),
@@ -301,6 +302,7 @@ public class BookCatalogSearchService {
                         .comparingInt((CatalogBookResult result) ->
                                 relevance(result, cleanedQuery, searchBy))
                         .reversed()
+                        .thenComparingInt(BookCatalogSearchService::languageSortRank)
                         .thenComparing(CatalogBookResult::title, String.CASE_INSENSITIVE_ORDER))
                 .forEach(result -> unique.merge(
                         identity(result),
@@ -491,6 +493,11 @@ public class BookCatalogSearchService {
         }
 
         return score;
+    }
+    private static int languageSortRank(CatalogBookResult result) {
+        if (isEnglish(result.language())) return 0;
+        if (!hasText(result.language())) return 1;
+        return 2;
     }
     private static boolean hasStrongFormatMatch(
             Iterable<CatalogBookResult> results,
@@ -1666,6 +1673,15 @@ public class BookCatalogSearchService {
             if (seriesMatchesQuery(result, query)) score += 1800;
             if (looksLikeAncillaryRecord(result)) score -= 900;
             if (looksLikeMultiBookBundle(result.title())) score -= 3000;
+        }
+
+        // Preferred-language editions should beat otherwise equivalent,
+        // metadata-richer foreign editions. The bonus remains far below the
+        // score separating an exact work-title match from a weak title match.
+        if (isEnglish(result.language())) {
+            score += 100;
+        } else if (!hasText(result.language())) {
+            score += 50;
         }
 
         if (result.coverImageUrl() != null) score += 25;
