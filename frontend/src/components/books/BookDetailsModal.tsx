@@ -162,6 +162,18 @@ function BookDetailsModalContent({
   );
 }, [readerHandwritingStyle]);
 
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !experienceModalOpen) {
+        event.preventDefault();
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [experienceModalOpen, onClose]);
+
   const experiences = useMemo(
     () => draftBook?.readingExperiences ?? [],
     [draftBook?.readingExperiences]
@@ -893,7 +905,15 @@ function renderBookRecordPage() {
 
   return (
     <>
-      <div className="add-book-overlay">
+      <div
+        className="add-book-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${currentBook.title} reading record`}
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+      >
         <div
           className="add-book-ledger"
           style={{ backgroundImage: `url(${openBookBg})` }}

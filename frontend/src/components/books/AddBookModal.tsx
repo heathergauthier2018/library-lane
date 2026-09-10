@@ -1114,7 +1114,7 @@ export default function AddBookModal({
   useEffect(() => {
     if (!activeCatalogField) return;
 
-    function dismissCatalog(event: PointerEvent) {
+    function dismissCatalog(event: globalThis.MouseEvent) {
       const target = event.target;
       if (!(target instanceof Element)) return;
       if (target.closest(".catalog-search-field-active")) return;
@@ -1133,11 +1133,14 @@ export default function AddBookModal({
       setCatalogSearching(false);
     }
 
-    document.addEventListener("pointerdown", dismissCatalog);
+    // Dismiss after the target's click has completed. Using pointerdown here
+    // could rerender the ledger between press and release, detaching action
+    // buttons before their click handlers had a chance to run.
+    document.addEventListener("click", dismissCatalog);
     document.addEventListener("keydown", dismissWithEscape);
 
     return () => {
-      document.removeEventListener("pointerdown", dismissCatalog);
+      document.removeEventListener("click", dismissCatalog);
       document.removeEventListener("keydown", dismissWithEscape);
     };
   }, [activeCatalogField]);

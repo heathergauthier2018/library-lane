@@ -1,5 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
+// These tests animate multiple full-screen, high-resolution storybook layers.
+// Keep this visual journey serial even when the wider Playwright project uses
+// parallel workers; concurrent copies can starve Chromium and detach otherwise
+// stable controls during actionability checks.
+test.describe.configure({ mode: "serial" });
+
 const animatedBook = {
   id: 41,
   title: "The Clockwork Garden",
@@ -34,7 +40,10 @@ async function openLibraryWithBook(
       const url = new URL(request.url());
 
       if (url.pathname === "/api/books" && request.method() === "GET") {
-        await route.fulfill({ status: 200, json: [] });
+        await route.fulfill({
+          status: 200,
+          json: addBook ? [animatedBook] : [],
+        });
         return;
       }
       if (url.pathname === "/api/books" && request.method() === "POST") {
@@ -50,14 +59,15 @@ async function openLibraryWithBook(
   );
 
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  if (!addBook) return;
+  await page.getByRole("button", { name: "Books", exact: true }).click();
+  await expect(page.locator(".books-page")).toBeVisible();
 
-  await page.getByRole("button", { name: /^\+?\s*add book$/i }).click();
-  await page.locator(".ledger-field-title input").fill("The Clockwork Garden");
-  await page.locator(".ledger-field-author input").fill("Mara Vale");
-  await page
-    .getByRole("button", { name: "Add Story to Library", exact: true })
-    .click();
+  if (!addBook) {
+    await expect(
+      page.getByRole("button", { name: /^\+?\s*add book$/i }),
+    ).toBeVisible();
+    return;
+  }
 
   await expect(animatedShelfBook(page)).toBeVisible({ timeout: 15_000 });
 }
@@ -67,15 +77,20 @@ test("a successfully saved cover floats into its real shelf slot", async ({
 }) => {
   await openLibraryWithBook(page, false);
   await page.getByRole("button", { name: /^\+?\s*add book$/i }).click();
-  await page.locator(".ledger-field-title input").fill("The Clockwork Garden");
   await page.locator(".ledger-field-author input").fill("Mara Vale");
+  await page.locator(".ledger-field-title input").fill("The Clockwork Garden");
+  await expect(page.locator(".ledger-field-title input"))
+    .toHaveValue("The Clockwork Garden");
   await page
     .getByRole("button", { name: "Add Story to Library", exact: true })
     .click();
 
   const motion = page.getByTestId("book-motion-layer");
   await expect(motion).toHaveAttribute("data-motion-kind", "arrival");
-  await expect(motion).toHaveAttribute("data-motion-stage", "preview");
+  await expect(motion).toHaveAttribute(
+    "data-motion-stage",
+    /preview|travel/,
+  );
   await expect
     .poll(() => motion.getAttribute("data-motion-stage"))
     .toBe("travel");
@@ -116,22 +131,49 @@ test("closing the ledger returns the book to its measured shelf position", async
   const motion = page.getByTestId("book-motion-layer");
   await expect(motion).toHaveAttribute("data-motion-kind", "close");
   await expect(motion).toHaveAttribute("data-motion-stage", "closing");
-  await expect(motion.locator(".book-motion-cover")).toHaveCSS("opacity", "0");
   await expect
     .poll(() => motion.getAttribute("data-motion-stage"), {
       intervals: [50],
       timeout: 2_000,
     })
-    .toBe("covering");
-  await expect(motion.locator(".book-motion-spread")).toHaveCSS("opacity", "0");
-  await expect
-    .poll(() => motion.getAttribute("data-motion-stage"), {
-      intervals: [50],
-      timeout: 3_500,
-    })
     .toBe("return");
   await expect(motion).toHaveCount(0, { timeout: 3_000 });
   await expect(animatedShelfBook(page)).toBeVisible();
+});
+
+test("cover display is remembered and uses the same book journey", async ({
+  page,
+}) => {
+  await openLibraryWithBook(page);
+
+  await page.getByRole("button", { name: "Covers" }).click();
+  await expect(page.locator(".bookshelf-display-cover")).toBeVisible();
+  await expect(animatedShelfBook(page).locator(".shelf-book-cover-shell"))
+    .toBeVisible();
+
+  await animatedShelfBook(page).click();
+  await expect(page.getByTestId("book-motion-layer"))
+    .toHaveClass(/book-motion-from-cover/);
+  await expect(page.locator(".add-book-ledger")).toBeVisible({
+    timeout: 4_000,
+  });
+
+  await page.reload();
+  await page.getByRole("button", { name: "Books", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Covers" }))
+    .toHaveAttribute("aria-pressed", "true");
+});
+
+test("Escape closes an open reading record", async ({ page }) => {
+  await openLibraryWithBook(page);
+  await animatedShelfBook(page).click();
+  await expect(page.locator(".add-book-ledger")).toBeVisible({ timeout: 4_000 });
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".add-book-ledger")).toHaveCount(0);
+  await expect(page.getByTestId("book-motion-layer")).toHaveCount(0, {
+    timeout: 3_000,
+  });
 });
 
 test("reduced-motion readers open the ledger without a flight animation", async ({

@@ -278,9 +278,12 @@ type BookMotion = {
     | "return";
   book: ShelfBook;
   shelfRect: MotionRect;
+  displayMode: BookDisplayMode;
 };
 
 const LIBRARY_LANE_BOOKS_KEY = "libraryLaneBooks";
+const LIBRARY_LANE_DISPLAY_MODE_KEY = "libraryLaneBookDisplayMode";
+type BookDisplayMode = "spine" | "cover";
 
 const mockColors = [
   "#355f86",
@@ -901,7 +904,7 @@ function BookMotionLayer({ motion }: { motion: BookMotion | null }) {
 
   return (
     <div
-      className={`book-motion-layer book-motion-${motion.kind} book-motion-${motion.stage}`}
+      className={`book-motion-layer book-motion-${motion.kind} book-motion-${motion.stage} book-motion-from-${motion.displayMode}`}
       data-testid="book-motion-layer"
       data-motion-kind={motion.kind}
       data-motion-stage={motion.stage}
@@ -1345,6 +1348,13 @@ const BOOKS_PER_BOOKCASE = shelfZones.reduce(
   0,
 );
 
+const coverShelfZones: ShelfZone[] = shelfZones.map((zone, index) => ({
+  ...zone,
+  // Covers need breathing room to remain recognizable. The shallower top
+  // balcony holds two per alcove; the larger shelves below hold three.
+  capacity: index < 5 ? 2 : 3,
+}));
+
 function frontendStatusFromBackend(status?: string | null, dnf?: boolean) {
   if (dnf) return "DNF";
 
@@ -1704,11 +1714,14 @@ function loadSavedBooks(): ShelfBook[] {
   }
 }
 
-function chunkBooksIntoBookcases(books: ShelfBook[]) {
+function chunkBooksIntoBookcases(
+  books: ShelfBook[],
+  booksPerBookcase = BOOKS_PER_BOOKCASE,
+) {
   const pages: ShelfBook[][] = [];
 
-  for (let i = 0; i < books.length; i += BOOKS_PER_BOOKCASE) {
-    pages.push(books.slice(i, i + BOOKS_PER_BOOKCASE));
+  for (let i = 0; i < books.length; i += booksPerBookcase) {
+    pages.push(books.slice(i, i + booksPerBookcase));
   }
 
   return pages.length > 0 ? pages : [[]];
@@ -1919,6 +1932,10 @@ export default function BooksPage({
   const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState("added-new");
   const [filtersOpen, setFiltersOpen] = useState(true);
+  const [displayMode, setDisplayMode] = useState<BookDisplayMode>(() => {
+    const saved = window.localStorage.getItem(LIBRARY_LANE_DISPLAY_MODE_KEY);
+    return saved === "cover" ? "cover" : "spine";
+  });
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [formatFilters, setFormatFilters] = useState<string[]>([]);
   const [romanceFilters, setRomanceFilters] = useState<string[]>([]);
@@ -1937,10 +1954,22 @@ export default function BooksPage({
   const shelfBookRefs = useRef(new Map<string, HTMLButtonElement>());
   const motionSequence = useRef(0);
   const bookMotionRef = useRef<BookMotion | null>(null);
+  const booksRef = useRef(books);
+
+  // Arrival animation timing belongs to the pending book id, not to every
+  // subsequent metadata refresh. Keep the latest collection available without
+  // making an in-flight sequence restart whenever `books` gets a new identity.
+  useEffect(() => {
+    booksRef.current = books;
+  }, [books]);
 
   useEffect(() => {
     bookMotionRef.current = bookMotion;
   }, [bookMotion]);
+
+  useEffect(() => {
+    window.localStorage.setItem(LIBRARY_LANE_DISPLAY_MODE_KEY, displayMode);
+  }, [displayMode]);
 
   useEffect(() => {
     async function loadBooksFromApi() {
@@ -2058,12 +2087,13 @@ export default function BooksPage({
     seriesFilters,
     specialFilters,
     genreFilters,
+    displayMode,
   ]);
 
   useEffect(() => {
     if (!pendingArrivalId || bookMotionRef.current) return;
     const arrivalId = pendingArrivalId;
-    const arrivingBook = books.find((book) => book.id === arrivalId);
+    const arrivingBook = booksRef.current.find((book) => book.id === arrivalId);
     if (!arrivingBook) return;
     const arrivalBook = arrivingBook;
 
@@ -2091,6 +2121,7 @@ export default function BooksPage({
         stage: "preview",
         book: arrivalBook,
         shelfRect: motionRect(destination),
+        displayMode,
       });
       await waitForMotion(480);
       if (cancelled || sequence !== motionSequence.current) return;
@@ -2111,7 +2142,7 @@ export default function BooksPage({
     return () => {
       cancelled = true;
     };
-  }, [pendingArrivalId, books]);
+  }, [pendingArrivalId, displayMode]);
 
   const genreOptions = useMemo(() => {
     return Array.from(
@@ -2265,9 +2296,17 @@ export default function BooksPage({
     [books, spinePalettes],
   );
 
-  const bookcasePages = chunkBooksIntoBookcases(filteredAndSortedBooks);
+  const activeShelfZones = displayMode === "cover" ? coverShelfZones : shelfZones;
+  const activeBooksPerBookcase = activeShelfZones.reduce(
+    (total, zone) => total + zone.capacity,
+    0,
+  );
+  const bookcasePages = chunkBooksIntoBookcases(
+    filteredAndSortedBooks,
+    activeBooksPerBookcase,
+  );
   const currentBooksForBookcase = bookcasePages[currentBookcasePage] ?? [];
-  const shelves = buildShelves(currentBooksForBookcase, shelfZones);
+  const shelves = buildShelves(currentBooksForBookcase, activeShelfZones);
 
   async function handleShelfBookOpen(
     book: ShelfBook,
@@ -2286,20 +2325,21 @@ export default function BooksPage({
       stage: "lift",
       book,
       shelfRect: motionRect(element),
+      displayMode,
     });
-    await waitForMotion(240);
+    await waitForMotion(180);
     if (sequence !== motionSequence.current) return;
 
     setBookMotion((current) =>
       current ? { ...current, stage: "reveal" } : current,
     );
-    await waitForMotion(900);
+    await waitForMotion(620);
     if (sequence !== motionSequence.current) return;
 
     setBookMotion((current) =>
       current ? { ...current, stage: "opening" } : current,
     );
-    await waitForMotion(800);
+    await waitForMotion(680);
     if (sequence !== motionSequence.current) return;
 
     setSelectedBook(book);
@@ -2330,6 +2370,7 @@ export default function BooksPage({
       stage: "closing",
       book: closingBook,
       shelfRect: motionRect(destination),
+      displayMode,
     });
     // Paint the matching open-book proxy over the ledger before removing the
     // interactive modal. This prevents a blank or single-cover flash.
@@ -2340,27 +2381,13 @@ export default function BooksPage({
     );
     if (sequence !== motionSequence.current) return;
     setSelectedBook(null);
-    await waitForMotion(720);
-    if (sequence !== motionSequence.current) return;
-
-    setBookMotion((current) =>
-      current ? { ...current, stage: "covering" } : current,
-    );
-    // Pages finish closing before the outer cover is revealed. This prevents
-    // the cover from floating in front of a still-open ledger.
-    await waitForMotion(800);
-    if (sequence !== motionSequence.current) return;
-
-    setBookMotion((current) =>
-      current ? { ...current, stage: "preview" } : current,
-    );
-    await waitForMotion(420);
+    await waitForMotion(680);
     if (sequence !== motionSequence.current) return;
 
     setBookMotion((current) =>
       current ? { ...current, stage: "return" } : current,
     );
-    await waitForMotion(780);
+    await waitForMotion(720);
     if (sequence !== motionSequence.current) return;
 
     setBookMotion(null);
@@ -2524,7 +2551,7 @@ export default function BooksPage({
       const updatedBooks = previousBooks.filter((book) => book.id !== bookId);
       const maxPage = Math.max(
         0,
-        Math.ceil(updatedBooks.length / BOOKS_PER_BOOKCASE) - 1,
+        Math.ceil(updatedBooks.length / activeBooksPerBookcase) - 1,
       );
 
       setCurrentBookcasePage((page) => Math.min(page, maxPage));
@@ -2573,13 +2600,34 @@ export default function BooksPage({
               <span>Every story I have added to Library Lane.</span>
             </div>
 
-            <button
-              className="books-add-button"
-              onClick={() => setAddBookOpen(true)}
-              style={{ backgroundImage: `url(${booksAddButtonFrame})` }}
-            >
-              + Add Book
-            </button>
+            <div className="books-header-actions">
+              <button
+                className="books-add-button"
+                onClick={() => setAddBookOpen(true)}
+                style={{ backgroundImage: `url(${booksAddButtonFrame})` }}
+              >
+                + Add Book
+              </button>
+
+              <div className="book-display-toggle" role="group" aria-label="Book display">
+              <button
+                type="button"
+                className={displayMode === "spine" ? "active" : ""}
+                aria-pressed={displayMode === "spine"}
+                onClick={() => setDisplayMode("spine")}
+              >
+                Spines
+              </button>
+              <button
+                type="button"
+                className={displayMode === "cover" ? "active" : ""}
+                aria-pressed={displayMode === "cover"}
+                onClick={() => setDisplayMode("cover")}
+              >
+                Covers
+              </button>
+              </div>
+            </div>
           </section>
 
           <section className="books-toolbar">
@@ -2738,7 +2786,7 @@ export default function BooksPage({
 
         <section className="bookcase-view">
           <section
-            className="bookshelf-page-background"
+            className={`bookshelf-page-background bookshelf-display-${displayMode}`}
             style={{ backgroundImage: `url(${bookshelfBackground})` }}
           >
             {shelves.map((shelf) => (
@@ -2752,7 +2800,7 @@ export default function BooksPage({
               >
                 {shelf.books.map((book) => (
                   <button
-                    className={`shelf-book shelf-book-illustrated spine-variant-${spineVariantForBook(
+                    className={`shelf-book shelf-book-${displayMode} shelf-book-illustrated spine-variant-${spineVariantForBook(
                       book,
                     )} spine-binding-${spineBindingForBook(
                       book,
@@ -2782,6 +2830,24 @@ export default function BooksPage({
                       book.author ? ` by ${book.author}` : ""
                     }`}
                   >
+                    {displayMode === "cover" ? (
+                      <span className="shelf-book-cover-shell" aria-hidden="true">
+                        {book.coverUrl ? (
+                          <img
+                            src={book.coverUrl}
+                            alt=""
+                            loading="lazy"
+                            onError={(event) => {
+                              event.currentTarget.hidden = true;
+                            }}
+                          />
+                        ) : null}
+                        <span className="shelf-book-cover-fallback">
+                          <strong>{book.title}</strong>
+                          {book.author && <small>{book.author}</small>}
+                        </span>
+                      </span>
+                    ) : (
                     <span className="shelf-book-shell" aria-hidden="true">
                       <span className="shelf-book-edge" />
                       <span className="shelf-book-band shelf-book-band-top" />
@@ -2795,6 +2861,7 @@ export default function BooksPage({
                         </span>
                       )}
                     </span>
+                    )}
                     <span className="shelf-book-tooltip" role="tooltip">
                       <strong>{book.title}</strong>
                       {book.author && <small>{book.author}</small>}

@@ -4968,6 +4968,14 @@ height: 100%;
   transition: opacity 220ms ease;
 }
 
+/* The motion proxy continuously transforms between a narrow shelf slot, a
+   closed cover, and a two-page ledger. A separate rectangular page block
+   cannot follow those proportions without flashing or forming white sidebars,
+   so the real cover and illustrated ledger provide the entire handoff. */
+.book-motion-layer .book-motion-page-edge {
+  display: none;
+}
+
 .book-motion-volume .book-motion-cover {
   z-index: 3;
   transition:
@@ -5092,6 +5100,11 @@ height: 100%;
 .book-motion-open.book-motion-handoff .book-motion-page-edge,
 .book-motion-close.book-motion-closing .book-motion-page-edge {
   opacity: 0;
+  /* Never let the closed-book page block enlarge with the ledger. Fading this
+     layer while its parent changes size creates a giant cream rectangle
+     between the real cover and the open spread. */
+  visibility: hidden;
+  transition: none;
 }
 
 .book-motion-open.book-motion-opening .book-motion-spine,
@@ -6860,6 +6873,239 @@ body::-webkit-scrollbar,
   font-size: var(--reader-handwriting-size, 20px) !important;
   line-height: var(--reader-handwriting-line-height, 1.55) !important;
   font-weight: 400 !important;
+}
+
+/* =========================================================
+   SHARED BOOK DISPLAY + CONTINUOUS BOOK JOURNEY
+   This final layer intentionally owns the Books/Collections presentation.
+   It replaces the older experimental motion stages above without requiring
+   the ledger or shelf artwork to know how a book was opened.
+========================================================= */
+
+.books-header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-right: clamp(76px, 5.5vw, 96px);
+}
+
+.books-header-actions .books-add-button {
+  margin-right: 0;
+}
+
+.book-display-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: clamp(150px, 11vw, 184px);
+  padding: 3px;
+  border: 1px solid rgba(214, 171, 82, 0.56);
+  border-radius: 999px;
+  background: rgba(13, 20, 34, 0.8);
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.42);
+}
+
+.book-display-toggle button {
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  color: #d9c58f;
+  background: transparent;
+  font-family: "Cormorant Garamond", Georgia, serif;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+.book-display-toggle button.active {
+  color: #2b170d;
+  background: linear-gradient(180deg, #f5df9e, #c99a45);
+  box-shadow: 0 0 12px rgba(245, 204, 109, 0.36);
+}
+
+.book-display-toggle button:focus-visible {
+  outline: 2px solid #ffe6a2;
+  outline-offset: 3px;
+}
+
+.shelf-book-cover {
+  flex-basis: 64px;
+  width: 64px;
+}
+
+.shelf-book-cover-shell {
+  position: absolute;
+  left: 50%;
+  bottom: 1px;
+  display: block;
+  width: 58px;
+  height: 90px;
+  overflow: hidden;
+  border: 1px solid rgba(225, 187, 105, 0.62);
+  border-radius: 2px 4px 4px 2px;
+  background: linear-gradient(145deg, var(--spine-base, #355f86), #181020);
+  box-shadow:
+    inset 2px 0 rgba(255, 239, 190, 0.22),
+    2px 4px 7px rgba(0, 0, 0, 0.66);
+  transform: translateX(-50%) rotateY(-4deg);
+  transform-origin: bottom center;
+  transition: transform 220ms cubic-bezier(0.2, 0.72, 0.2, 1), filter 220ms ease;
+}
+
+.shelf-book-cover-shell img {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.shelf-book-cover-fallback {
+  position: absolute;
+  inset: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: #fff0bd;
+  font-family: "Cormorant Garamond", Georgia, serif;
+  line-height: 0.92;
+  text-align: center;
+  text-shadow: 0 1px 2px #160b05;
+}
+
+.shelf-book-cover-fallback strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 10px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.shelf-book-cover-fallback small {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 7px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.shelf-book-cover:hover .shelf-book-cover-shell,
+.shelf-book-cover:focus-visible .shelf-book-cover-shell {
+  filter: brightness(1.08) saturate(1.06);
+  transform: translateX(-50%) translateY(-7px) rotateY(0deg) scale(1.08);
+}
+
+.shelf-book-in-motion .shelf-book-cover-shell {
+  opacity: 0;
+}
+
+/* One object now travels shelf -> cover -> open ledger. The obsolete brown
+   back-cover plane and staged settle/preview flashes are never exposed. */
+.book-motion-volume::after,
+.book-motion-back-cover {
+  display: none !important;
+}
+
+.book-motion-object,
+.book-motion-volume,
+.book-motion-spread,
+.book-motion-volume .book-motion-cover {
+  transition-duration: 680ms;
+}
+
+.book-motion-open.book-motion-lift .book-motion-object {
+  transform: translateZ(18px) translateY(-6px) scale(1.035);
+}
+
+.book-motion-from-cover.book-motion-open.book-motion-lift .book-motion-cover,
+.book-motion-from-cover.book-motion-close.book-motion-return .book-motion-cover {
+  opacity: 1;
+  transform: none;
+}
+
+.book-motion-from-cover.book-motion-open.book-motion-lift .book-motion-spine,
+.book-motion-from-cover.book-motion-close.book-motion-return .book-motion-spine {
+  opacity: 0;
+}
+
+.book-motion-close.book-motion-closing .book-motion-cover {
+  opacity: 1;
+  animation: library-lane-continuous-cover-close 680ms
+    cubic-bezier(0.32, 0.02, 0.2, 1) both;
+}
+
+.book-motion-close.book-motion-closing .book-motion-spread {
+  animation: library-lane-continuous-spread-close 680ms
+    cubic-bezier(0.32, 0.02, 0.2, 1) both;
+}
+
+.book-motion-close.book-motion-return .book-motion-object {
+  animation: none;
+}
+
+.book-motion-from-spine.book-motion-open.book-motion-lift .book-motion-volume {
+  transform: translateY(-7px) rotateY(86deg);
+}
+
+.book-motion-from-spine.book-motion-open.book-motion-reveal .book-motion-spine {
+  opacity: 0;
+  transition-duration: 70ms;
+}
+
+.book-motion-from-spine.book-motion-open.book-motion-reveal .book-motion-cover {
+  opacity: 1;
+  transition-duration: 110ms;
+}
+
+.book-motion-from-spine.book-motion-close.book-motion-return .book-motion-cover {
+  opacity: 1;
+  animation: library-lane-cover-return-to-spine 720ms
+    cubic-bezier(0.18, 0.76, 0.22, 1) both;
+}
+
+.book-motion-from-spine.book-motion-close.book-motion-return .book-motion-spine {
+  opacity: 0;
+  animation: library-lane-spine-return-finish 720ms ease both;
+}
+
+@keyframes library-lane-continuous-cover-close {
+  from { transform: rotateY(-178deg); }
+  to { transform: rotateY(0deg); }
+}
+
+@keyframes library-lane-continuous-spread-close {
+  0% { opacity: 1; transform: scaleX(1) scaleY(1); }
+  72% { opacity: 1; transform: scaleX(0.08) scaleY(0.96); }
+  100% { opacity: 0; transform: scaleX(0.035) scaleY(0.91); }
+}
+
+@keyframes library-lane-cover-return-to-spine {
+  0%, 72% { opacity: 1; }
+  86%, 100% { opacity: 0; }
+}
+
+@keyframes library-lane-spine-return-finish {
+  0%, 76% { opacity: 0; }
+  90%, 100% { opacity: 1; }
+}
+
+@media (max-width: 760px) {
+  .books-header-actions {
+    margin-right: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shelf-book-cover-shell,
+  .book-display-toggle button {
+    transition-duration: 1ms !important;
+  }
 }
 
 .catalog-result-copy .catalog-result-source {
