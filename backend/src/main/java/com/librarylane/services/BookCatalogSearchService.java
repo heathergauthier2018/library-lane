@@ -230,6 +230,8 @@ public class BookCatalogSearchService {
         Map<String, CatalogBookResult> unique = new LinkedHashMap<>();
         combined.stream()
                 .map(BookCatalogSearchService::cleanMetadata)
+                .filter(result -> !hasText(format)
+                        || normalize(format).equals(normalize(result.format())))
                 .filter(result -> matchesRequestedField(result, cleanedQuery, searchBy))
                 .filter(result -> shouldShowSingleWorkResult(
                         result,

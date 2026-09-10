@@ -585,6 +585,31 @@ class BookCatalogCombinedFormatSearchTest {
     }
 
     @Test
+    void explicitPhysicalSearchRejectsMislabeledEbookResults() {
+        CatalogBookResult physical = result(
+                "Open Library",
+                "physical-queen",
+                "Queen",
+                "PHYSICAL");
+        CatalogBookResult ebook = result(
+                "Google Books",
+                "ebook-queen",
+                "Queen",
+                "EBOOK");
+
+        when(openLibrary.search("Queen", "PHYSICAL", "TITLE"))
+                .thenReturn(List.of(physical));
+        when(googleBooks.search("Queen", "PHYSICAL", "TITLE"))
+                .thenReturn(List.of(ebook));
+
+        List<CatalogBookResult> results =
+                service.search("Queen", "PHYSICAL", "TITLE");
+
+        assertEquals(1, results.size());
+        assertEquals("PHYSICAL", results.getFirst().format());
+        assertEquals("physical-queen", results.getFirst().providerId());
+    }
+    @Test
     void explicitPhysicalSearchDoesNotInvokeApple() {
         when(openLibrary.search("Queen", "PHYSICAL", "TITLE"))
                 .thenReturn(List.of(result(
