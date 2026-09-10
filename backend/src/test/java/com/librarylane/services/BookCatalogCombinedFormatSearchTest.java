@@ -605,6 +605,15 @@ class BookCatalogCombinedFormatSearchTest {
                 "en",
                 null,
                 "PHYSICAL");
+        CatalogBookResult deluxe = resultWithLanguageAndDescription(
+                "Google Books",
+                "onyx-deluxe",
+                "Onyx Storm (Deluxe Limited Edition)",
+                "Rebecca Yarros",
+                "The Empyrean",
+                "en",
+                null,
+                "PHYSICAL");
 
         CatalogBookResult wrongAuthor = resultWithLanguageAndDescription(
                 "Open Library",
@@ -619,12 +628,17 @@ class BookCatalogCombinedFormatSearchTest {
         when(openLibrary.search("Onyx Storm", "PHYSICAL", "TITLE"))
                 .thenReturn(List.of(wrongAuthor, turkish));
         when(googleBooks.search("Onyx Storm", "PHYSICAL", "TITLE"))
-                .thenReturn(List.of(english));
+                .thenReturn(List.of(english, deluxe));
 
         List<CatalogBookResult> results =
                 service.search("Onyx Storm", "PHYSICAL", "TITLE");
 
         assertEquals("onyx-en-explicit", results.getFirst().providerId());
+        List<String> rankedIds = results.stream()
+                .map(CatalogBookResult::providerId)
+                .toList();
+        assertTrue(rankedIds.indexOf("onyx-deluxe")
+                < rankedIds.indexOf("onyx-wrong-author"));
         assertTrue(results.stream().anyMatch(result ->
                 "onyx-tr-explicit".equals(result.providerId())));
     }

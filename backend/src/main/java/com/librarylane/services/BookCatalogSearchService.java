@@ -573,8 +573,12 @@ public class BookCatalogSearchService {
             CatalogBookResult result,
             Set<String> dominantAuthors) {
         if (dominantAuthors.isEmpty()) return 0;
+        // A raw exact title can score up to 500 points above the same work
+        // carrying an edition suffix, with up to 70 additional metadata
+        // points. Consensus must outweigh that difference without allowing a
+        // weak title match to overtake a genuinely exact work.
         return belongsToAuthorFamily(result, dominantAuthors)
-                ? 200 : 0;
+                ? 600 : 0;
     }
     private static boolean seriesMatchesQuery(
             CatalogBookResult result,
@@ -1759,7 +1763,9 @@ public class BookCatalogSearchService {
         return normalize(value)
                 .replaceFirst("^the\\s+", "")
                 .replaceFirst(
-                        "\\s+(?:special edition|anniversary edition|"
+                                                  "\\s+(?:deluxe limited edition|deluxe edition|"
+                                  + "limited edition|standard edition|special edition|"
+                                  + "anniversary edition|"
                                 + "collector s edition|unabridged|abridged|"
                                 + "dramatized adaptation|dramatized|audiobook)$",
                         "")
