@@ -40,6 +40,7 @@ class AppleAudiobookCatalogServiceTest {
                       "collectionId": 12345,
                       "collectionName": "Fourth Wing",
                       "artistName": "Rebecca Yarros",
+                      "copyright": "\\u00a9 2023 Recorded Books",
                       "primaryGenreName": "Fiction",
                       "description": "&lt;ul&gt;&lt;li&gt;Now with&amp;#xa0;an extended chapter.&lt;/li&gt;&lt;/ul&gt;",
                       "releaseDate": "2023-05-02T07:00:00Z",
@@ -72,6 +73,7 @@ class AppleAudiobookCatalogServiceTest {
         assertEquals(1, results.size());
         assertEquals("Fourth Wing", results.getFirst().title());
         assertEquals("AUDIOBOOK", results.getFirst().format());
+        assertEquals("Recorded Books", results.getFirst().publisher());
         assertEquals(7_200, results.getFirst().audiobookLengthSeconds());
         assertEquals(
                 "https://example.test/600x600bb.jpg",

@@ -18,11 +18,13 @@ type BookDetailsModalProps = {
   book: ShelfBook | null;
   onClose: () => void;
   onSave: (book: ShelfBook) => void;
+  onRefreshMetadata: (book: ShelfBook) => void;
   onReadingExperiencesChange: (
     bookId: string,
     experiences: ReadingExperience[]
   ) => void;
   onDelete: (bookId: string) => void;
+  onRepairCover: (book: ShelfBook) => void;
 };
 
 const statusOptions: Option[] = [
@@ -126,6 +128,8 @@ function BookDetailsModalContent({
   onSave,
   onReadingExperiencesChange,
   onDelete,
+  onRepairCover,
+  onRefreshMetadata,
 }: BookDetailsModalContentProps) {
   const [draftBook, setDraftBook] = useState<ShelfBook | null>(book);
   const [ledgerPage, setLedgerPage] = useState(0);
@@ -161,6 +165,18 @@ function BookDetailsModalContent({
     `reader-handwriting-style-${readerHandwritingStyle}`
   );
 }, [readerHandwritingStyle]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !experienceModalOpen) {
+        event.preventDefault();
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [experienceModalOpen, onClose]);
 
   const experiences = useMemo(
     () => draftBook?.readingExperiences ?? [],
@@ -708,6 +724,7 @@ function renderBookRecordPage() {
                 })}
               </span>
             </button>
+
           ))
         )}
       </section>
@@ -893,7 +910,15 @@ function renderBookRecordPage() {
 
   return (
     <>
-      <div className="add-book-overlay">
+      <div
+        className="add-book-overlay"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${currentBook.title} reading record`}
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+      >
         <div
           className="add-book-ledger"
           style={{ backgroundImage: `url(${openBookBg})` }}
@@ -941,6 +966,25 @@ function renderBookRecordPage() {
             </div>
           </div>
 
+          <div className="book-details-maintenance-actions">
+            <button
+              type="button"
+              className="add-book-frame-button close-book-button"
+              onClick={() => onRepairCover(currentBook)}
+              style={{ backgroundImage: `url(${closeBookFrame})` }}
+            >
+              Choose Cover
+            </button>
+            <button
+              type="button"
+              className="add-book-frame-button close-book-button"
+              onClick={() => onRefreshMetadata(currentBook)}
+              style={{ backgroundImage: `url(${closeBookFrame})` }}
+            >
+              Refresh Details
+            </button>
+          </div>
+
           <div className="add-book-actions add-book-actions-right">
             <button
               type="button"
@@ -984,12 +1028,21 @@ export default function BookDetailsModal(props: BookDetailsModalProps) {
 
   return (
     <BookDetailsModalContent
-      key={props.book.id}
+      key={[
+        props.book.id,
+        props.book.coverUrl || "no-cover",
+        props.book.seriesName,
+        props.book.seriesNumber,
+        props.book.description?.length || 0,
+        props.book.pageCount,
+      ].join("-")}
       book={props.book}
       onClose={props.onClose}
       onSave={props.onSave}
       onReadingExperiencesChange={props.onReadingExperiencesChange}
       onDelete={props.onDelete}
+      onRepairCover={props.onRepairCover}
+      onRefreshMetadata={props.onRefreshMetadata}
     />
   );
 }

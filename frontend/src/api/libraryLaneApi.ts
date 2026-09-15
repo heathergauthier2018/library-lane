@@ -81,6 +81,20 @@ export const bookApi = {
     });
   },
 
+  updateArrangement(placements: { bookId: number; position: number }[]) {
+    return request("/api/books/arrangement", {
+      method: "PUT",
+      body: JSON.stringify(placements),
+    });
+  },
+
+  updateCoverArrangement(placements: { bookId: number; position: number }[]) {
+    return request("/api/books/cover-arrangement", {
+      method: "PUT",
+      body: JSON.stringify(placements),
+    });
+  },
+
   delete(id: number) {
     return request(`/api/books/${id}`, {
       method: "DELETE",

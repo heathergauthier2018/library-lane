@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent,
+} from "react";
 import type { AppPage } from "../App";
 import FantasySidebar from "../dashboard/FantasySidebar";
 import bookshelfBackground from "../assets/storybook/backgrounds/bookshelf-background.png";
@@ -18,10 +23,7 @@ import {
   bookApi,
   catalogApi,
   readingExperienceApi,
-} from "../api/libraryLaneApi";
-import type {
-  CatalogBookFormat,
-  CatalogBookResult,
+  type CatalogBookResult,
 } from "../api/libraryLaneApi";
 
 type BooksPageProps = {
@@ -32,6 +34,7 @@ type BooksPageProps = {
 };
 
 const sortOptions: LibrarySelectOption[] = [
+  { value: "my-arrangement", label: "My arrangement", group: "My Bookshelf" },
   { value: "added-new", label: "Recently added", group: "Added to Library" },
   { value: "added-old", label: "Oldest added", group: "Added to Library" },
   { value: "title-az", label: "Title A–Z", group: "Alphabetical" },
@@ -119,6 +122,8 @@ type BackendBook = {
   narrator?: string | null;
   catalogProvider?: string | null;
   catalogProviderId?: string | null;
+  shelfPosition?: number | null;
+  coverShelfPosition?: number | null;
   personalNotes?: string | null;
   favorite?: boolean;
   owned?: boolean;
@@ -229,6 +234,8 @@ export type ShelfBook = {
   isbn13?: string;
   catalogProvider?: string;
   catalogProviderId?: string;
+  shelfPosition?: number;
+  coverShelfPosition?: number;
   readingStatus: string;
   format: string;
   ownedStatus: string;
@@ -262,6 +269,11 @@ type ShelfZone = {
   capacity: number;
 };
 
+type ShelfSlot = {
+  number: number;
+  book?: ShelfBook;
+};
+
 type MotionRect = {
   left: number;
   top: number;
@@ -283,9 +295,12 @@ type BookMotion = {
     | "return";
   book: ShelfBook;
   shelfRect: MotionRect;
+  displayMode: BookDisplayMode;
 };
 
 const LIBRARY_LANE_BOOKS_KEY = "libraryLaneBooks";
+const LIBRARY_LANE_DISPLAY_MODE_KEY = "libraryLaneBookDisplayMode";
+type BookDisplayMode = "spine" | "cover";
 
 const mockColors = [
   "#355f86",
@@ -325,6 +340,260 @@ type SpinePalette = {
 };
 
 const coverPaletteCache = new Map<string, Promise<SpinePalette | null>>();
+const coverValidationCache = new Map<string, Promise<CoverInspection>>();
+const knownPlaceholderCoverPattern =
+  /(?:image[_-]?not[_-]?available|no[_-]?image|no[_-]?cover|placeholder|default[_-]?cover|missing[_-]?cover|cover[_-]?not[_-]?found)/i;
+
+function canonicalCoverIdentity(url: string) {
+  return url
+    .replace(/^http:/i, "https:")
+    .replace(/([?&])(?:zoom|w|width|height|img)=[^&]*/gi, "$1")
+    .replace(/[?&]+$/, "");
+}
+
+function coverLanguageRank(language?: string | null) {
+  const normalized = (language || "").toLowerCase();
+  if (normalized === "en" || normalized === "eng" || normalized.startsWith("en-")) return 0;
+  if (!normalized) return 1;
+  return 2;
+}
+
+type CoverInspection = {
+  usable: boolean;
+  width: number;
+  height: number;
+};
+
+function inspectLoadedCover(image: HTMLImageElement): CoverInspection {
+  const width = image.naturalWidth;
+  const height = image.naturalHeight;
+  const ratio = width / Math.max(1, height);
+  if (width < 180 || height < 240 || ratio < 0.42 || ratio > 1.08) {
+    return { usable: false, width, height };
+  }
+
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = 24;
+    canvas.height = 36;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return { usable: true, width, height };
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const pixels = context.getImageData(0, 0, 24, 36).data;
+    let nearlyWhite = 0;
+    let colorful = 0;
+    let transparent = 0;
+    const pixelCount = pixels.length / 4;
+    for (let index = 0; index < pixels.length; index += 4) {
+      const red = pixels[index];
+      const green = pixels[index + 1];
+      const blue = pixels[index + 2];
+      const alpha = pixels[index + 3];
+      if (alpha < 230) transparent += 1;
+      if (red > 232 && green > 232 && blue > 232) nearlyWhite += 1;
+      if (Math.max(red, green, blue) - Math.min(red, green, blue) > 34) {
+        colorful += 1;
+      }
+    }
+    const placeholderLike =
+      (nearlyWhite / pixelCount > 0.76 && colorful / pixelCount < 0.045) ||
+      transparent / pixelCount > 0.08;
+    return { usable: !placeholderLike, width, height };
+  } catch {
+    // Some legitimate providers do not expose pixels cross-origin. Their
+    // dimensions still protect us from tiny thumbnails and malformed assets.
+    return { usable: true, width, height };
+  }
+}
+
+function inspectCoverUrl(url: string): Promise<CoverInspection> {
+  if (!url.trim() || knownPlaceholderCoverPattern.test(url)) {
+    return Promise.resolve({ usable: false, width: 0, height: 0 });
+  }
+  const cached = coverValidationCache.get(url);
+  if (cached) return cached;
+  const inspection = new Promise<CoverInspection>((resolve) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.decoding = "async";
+    image.onload = () => resolve(inspectLoadedCover(image));
+    image.onerror = () => resolve({ usable: false, width: 0, height: 0 });
+    image.src = url;
+  });
+  coverValidationCache.set(url, inspection);
+  return inspection;
+}
+
+function matchingCoverCandidate(book: ShelfBook, candidate: CatalogBookResult) {
+  if (!candidate.coverImageUrl || knownPlaceholderCoverPattern.test(candidate.coverImageUrl)) {
+    return false;
+  }
+  const format = candidate.format?.toUpperCase();
+  const provider = candidate.provider.toLowerCase();
+  if (format === "AUDIOBOOK" || /audible|spotify|apple audiobook/.test(provider)) {
+    return false;
+  }
+  return matchesCoverWorkIdentity(book, candidate);
+}
+
+function matchesCoverWorkIdentity(book: ShelfBook, candidate: CatalogBookResult) {
+  const expectedTitles = coverTitleVariants(book.title);
+  const candidateTitle = normalizeBookText(candidate.title);
+  if (/\b(?:summary|study guide|workbook|companion|box set|collection)\b/.test(candidateTitle)) {
+    return false;
+  }
+  const titleMatches = expectedTitles.some((expectedTitle) => {
+    const safeEditionSuffix = candidateTitle.startsWith(`${expectedTitle} `) &&
+      /\b(?:novel|edition|illustrated|anniversary|deluxe|collector|collectors|special|movie tie in|classic|unabridged)\b/.test(
+        candidateTitle.slice(expectedTitle.length),
+      );
+    const exactSubtitle = expectedTitle.split(" ").length >= 3 &&
+      candidateTitle.endsWith(` ${expectedTitle}`);
+    return candidateTitle === expectedTitle || safeEditionSuffix || exactSubtitle;
+  });
+  if (!titleMatches) {
+    return false;
+  }
+  const expectedAuthors = new Set(
+    book.author.split(/[,;&]|\band\b/i).map(normalizeBookText).filter(Boolean),
+  );
+  return candidate.authors.some((author) =>
+    expectedAuthors.has(normalizeBookText(author)),
+  );
+}
+
+function coverTitleVariants(title: string) {
+  const normalized = normalizeBookText(title);
+  const variants = new Set([normalized]);
+  const afterColon = title.split(":").slice(1).join(":").trim();
+  if (afterColon) variants.add(normalizeBookText(afterColon));
+  const withoutSeriesPrefix = title
+    .replace(/^.+?\s+\d+(?:\.\d+)?\s*:\s*/i, "")
+    .replace(/^book\s+\d+(?:\.\d+)?\s*[:-]\s*/i, "")
+    .trim();
+  if (withoutSeriesPrefix) variants.add(normalizeBookText(withoutSeriesPrefix));
+  const verifiedAliases: Record<string, string[]> = {
+    "magic tree house 1 valley of the dinosaurs": ["dinosaurs before dark"],
+    "valley of the dinosaurs": ["dinosaurs before dark"],
+    "dinosaurs before dark": ["valley of the dinosaurs"],
+  };
+  [...variants].forEach((variant) => {
+    verifiedAliases[variant]?.forEach((alias) => variants.add(alias));
+  });
+  return [...variants].filter(Boolean);
+}
+
+function coverSearchRequests(book: ShelfBook) {
+  const requests = coverTitleVariants(book.title).flatMap((query) => [
+    catalogApi.searchBooks(query, undefined, "TITLE"),
+    catalogApi.searchBooks(query, "PHYSICAL", "TITLE"),
+    catalogApi.searchBooks(query, "EBOOK", "TITLE"),
+  ]);
+  if (book.author.trim()) {
+    requests.push(catalogApi.searchBooks(book.author, undefined, "AUTHOR"));
+  }
+  return requests;
+}
+
+function coverEditionLabel(book: ShelfBook, candidate: CatalogBookResult) {
+  const edition = normalizeBookText(candidate.editionFormat || "");
+  if (edition.includes("anniversary")) return candidate.editionFormat;
+  if (edition.includes("deluxe")) return candidate.editionFormat;
+  if (edition.includes("collector")) return candidate.editionFormat;
+  if (edition.includes("illustrated")) return candidate.editionFormat;
+  const title = normalizeBookText(candidate.title);
+  if (title.includes("anniversary")) return "Anniversary edition";
+  if (title.includes("deluxe")) return "Deluxe edition";
+  if (title.includes("collector")) return "Collector’s edition";
+  return title === normalizeBookText(book.title)
+    ? "Original cover"
+    : "Alternate cover";
+}
+
+function catalogLanguageRank(language?: string | null) {
+  const normalized = normalizeBookText(language || "");
+  if (["en", "eng", "english"].includes(normalized)) return 0;
+  return normalized ? 2 : 1;
+}
+
+function catalogFactScore(result: CatalogBookResult) {
+  return [
+    result.seriesName,
+    result.seriesNumber,
+    result.description,
+    result.pageCount,
+    result.publisher,
+    result.publicationDate,
+    result.isbn13,
+  ].filter((value) => value !== null && value !== undefined && value !== "").length;
+}
+
+function matchesSavedWork(book: ShelfBook, candidate: CatalogBookResult) {
+  const titles = coverTitleVariants(book.title);
+  const candidateTitle = normalizeBookText(candidate.title);
+  if (!titles.some((title) =>
+    title === candidateTitle || candidateTitle.startsWith(`${title} `)
+  )) return false;
+  const authors = new Set(
+    book.author.split(/[,;&]|\band\b/i).map(normalizeBookText).filter(Boolean),
+  );
+  return authors.size === 0 || candidate.authors.length === 0 ||
+    candidate.authors.some((author) => authors.has(normalizeBookText(author)));
+}
+
+function expandCoverCandidates(book: ShelfBook, results: CatalogBookResult[]) {
+  // A broad author/series search is discovery only. Never relabel its ISBN or
+  // image as this book until the source record itself matches the work.
+  const matchingResults = results.filter((result) =>
+    matchesCoverWorkIdentity(book, result),
+  );
+  const expanded = matchingResults.map((result) => ({
+    ...result,
+    coverImageUrl: result.coverImageUrl
+      ? preferredShelfCoverUrl(result.coverImageUrl)
+      : result.coverImageUrl,
+  }));
+  const isbns = new Set(
+    [
+      book.isbn13,
+      book.isbn10,
+      ...matchingResults.flatMap((result) => [result.isbn13, result.isbn10]),
+    ]
+      .map((value) => value?.replace(/[^0-9X]/gi, ""))
+      .filter((value): value is string => Boolean(value)),
+  );
+  isbns.forEach((isbn) => {
+    expanded.push({
+      provider: "OPEN_LIBRARY_COVERS",
+      providerId: `isbn-${isbn}`,
+      title: book.title,
+      authors: book.author ? [book.author] : [],
+      genres: [],
+      narrators: [],
+      coverImageUrl: `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg?default=false`,
+      isbn10: isbn.length === 10 ? isbn : null,
+      isbn13: isbn.length === 13 ? isbn : null,
+      publisher: "Open Library edition cover",
+      format: "PHYSICAL",
+    });
+  });
+  return expanded;
+}
+
+
+function preferredShelfCoverUrl(url: string) {
+  if (/books\.google/i.test(url)) {
+    const upgraded = url
+      .replace(/^http:/i, "https:")
+      .replace(/([?&])zoom=\d+/i, "$1zoom=2")
+      .replace(/([?&])edge=curl&?/i, "$1")
+      .replace(/[?&]+$/, "");
+    return upgraded.includes("zoom=")
+      ? upgraded
+      : `${upgraded}${upgraded.includes("?") ? "&" : "?"}zoom=2`;
+  }
+  return url.replace(/^http:/i, "https:");
+}
 
 const spineAssetModules = import.meta.glob(
   "../assets/storybook/book-spines/*.png",
@@ -857,12 +1126,14 @@ function BookMotionLayer({ motion }: { motion: BookMotion | null }) {
   if (!motion) return null;
 
   const spreadWidth = Math.min(
-    1420,
-    window.innerWidth * 0.96,
-    window.innerHeight * 0.96 * 1.5,
+    1180,
+    window.innerWidth * 0.9,
+    window.innerHeight * 0.88 * 1.5,
   );
   const spreadHeight = spreadWidth / 1.5;
-  const closedHeight = Math.min(spreadHeight * 0.96, window.innerHeight * 0.9);
+  // A closed book should approach at a believable reading size, then gain
+  // width as its left-hinged cover opens into the full ledger.
+  const closedHeight = Math.min(spreadHeight * 0.46, window.innerHeight * 0.36);
   const closedWidth = closedHeight * (2 / 3);
   const closedRect = {
     left: window.innerWidth / 2 - closedWidth / 2,
@@ -906,14 +1177,14 @@ function BookMotionLayer({ motion }: { motion: BookMotion | null }) {
 
   return (
     <div
-      className={`book-motion-layer book-motion-${motion.kind} book-motion-${motion.stage}`}
+      className={`book-motion-layer book-motion-${motion.kind} book-motion-${motion.stage} book-motion-from-${motion.displayMode}`}
       data-testid="book-motion-layer"
       data-motion-kind={motion.kind}
       data-motion-stage={motion.stage}
       aria-hidden="true"
     >
       <div className="book-motion-dust">
-        {Array.from({ length: 12 }, (_, index) => (
+        {Array.from({ length: 28 }, (_, index) => (
           <i key={index} />
         ))}
       </div>
@@ -938,6 +1209,11 @@ function BookMotionLayer({ motion }: { motion: BookMotion | null }) {
             )}
           </span>
         </div>
+        <div className="book-motion-turning-pages">
+          {Array.from({ length: 5 }, (_, index) => (
+            <i key={index} style={{ "--page-index": index } as CSSProperties} />
+          ))}
+        </div>
         <div className="book-motion-volume">
           <div className="book-motion-page-edge" />
           <div
@@ -961,130 +1237,6 @@ function BookMotionLayer({ motion }: { motion: BookMotion | null }) {
         </div>
       </div>
     </div>
-  );
-}
-
-function catalogFormatForShelfBook(format: string): CatalogBookFormat {
-  if (format === "EBOOK") return "EBOOK";
-  if (format === "AUDIOBOOK") return "AUDIOBOOK";
-  return "PHYSICAL";
-}
-
-function normalizedPersonNames(value: string) {
-  return splitList(value)
-    .map((name) => normalizeBookText(name).replace(/[^\p{L}\p{N}]/gu, ""))
-    .filter(Boolean);
-}
-
-function coverMatchScore(book: ShelfBook, candidate: CatalogBookResult) {
-  const bookTitle = normalizeBookText(book.title);
-  const candidateTitle = normalizeBookText(candidate.title || "");
-
-  if (!bookTitle || candidateTitle !== bookTitle) return 0;
-
-  let score = 45;
-  const bookIsbn13 = book.isbn13?.replace(/\D/g, "");
-  const bookIsbn10 = book.isbn10?.replace(/\D/g, "");
-  const candidateIsbn13 = candidate.isbn13?.replace(/\D/g, "");
-  const candidateIsbn10 = candidate.isbn10?.replace(/\D/g, "");
-
-  if (
-    (bookIsbn13 && candidateIsbn13 && bookIsbn13 === candidateIsbn13) ||
-    (bookIsbn10 && candidateIsbn10 && bookIsbn10 === candidateIsbn10)
-  ) {
-    score += 100;
-  }
-
-  const expectedAuthors = normalizedPersonNames(book.author);
-  const candidateAuthors = candidate.authors.flatMap(normalizedPersonNames);
-  const authorMatches = expectedAuthors.some((expected) =>
-    candidateAuthors.some(
-      (candidateAuthor) =>
-        candidateAuthor === expected ||
-        candidateAuthor.includes(expected) ||
-        expected.includes(candidateAuthor),
-    ),
-  );
-
-  if (authorMatches) score += 35;
-  if (candidate.format === catalogFormatForShelfBook(book.format)) score += 10;
-
-  const expectedPublisher = normalizeBookText(book.publisher || "");
-  const candidatePublisher = normalizeBookText(candidate.publisher || "");
-  if (
-    expectedPublisher &&
-    candidatePublisher &&
-    (expectedPublisher.includes(candidatePublisher) ||
-      candidatePublisher.includes(expectedPublisher))
-  ) {
-    score += 10;
-  }
-
-  if (
-    book.publicationYear &&
-    candidate.publicationDate?.startsWith(book.publicationYear)
-  ) {
-    score += 5;
-  }
-
-  return score;
-}
-
-function bestCoverMatch(
-  book: ShelfBook,
-  results: CatalogBookResult[],
-): CatalogBookResult | undefined {
-  return results
-    .filter((result) => Boolean(result.coverImageUrl))
-    .map((result) => ({ result, score: coverMatchScore(book, result) }))
-    .filter(({ score }) => score >= 80)
-    .sort((left, right) => right.score - left.score)[0]?.result;
-}
-
-function displayCoverScore(book: ShelfBook, candidate: CatalogBookResult) {
-  let score = coverMatchScore(book, candidate);
-  const provider = candidate.provider.toLowerCase();
-  const coverUrl = (candidate.coverImageUrl || "").toLowerCase();
-
-  // The shelf animation represents a bound volume, even when the reader owns
-  // an e-book or audiobook. Prefer a clean, front-facing physical edition for
-  // that visual while retaining the selected edition's metadata.
-  if (candidate.format === "PHYSICAL") score += 28;
-  if (provider.includes("google_books") || provider.includes("google books")) {
-    score += 14;
-  }
-  if (coverUrl.includes("books.google")) score += 10;
-  if (provider === "open_library" || provider === "open library") score -= 12;
-  if (coverUrl.includes("openlibrary") || coverUrl.includes("archive.org")) {
-    score -= 16;
-  }
-
-  return score;
-}
-
-function bestDisplayCoverMatch(
-  book: ShelfBook,
-  results: CatalogBookResult[],
-): CatalogBookResult | undefined {
-  return results
-    .filter((result) => Boolean(result.coverImageUrl))
-    .map((result) => ({ result, score: displayCoverScore(book, result) }))
-    .filter(({ score }) => score >= 80)
-    .sort((left, right) => right.score - left.score)[0]?.result;
-}
-
-function coverNeedsRefinement(book: ShelfBook) {
-  if (!book.coverUrl) return true;
-  const provider = (book.catalogProvider || "").toLowerCase();
-  const coverUrl = book.coverUrl.toLowerCase();
-
-  return (
-    provider.includes("open_library") ||
-    provider.includes("open library") ||
-    provider.includes("apple audiobook") ||
-    provider.includes("spotify audiobook") ||
-    coverUrl.includes("openlibrary") ||
-    coverUrl.includes("archive.org")
   );
 }
 
@@ -1474,6 +1626,28 @@ const BOOKS_PER_BOOKCASE = shelfZones.reduce(
   0,
 );
 
+// Cover positions are a separate, artwork-calibrated map. The arched alcoves
+// physically hold two covers; each rectangular shelf holds three. Keeping the
+// map explicit prevents later spine-capacity changes from silently moving
+// cover destinations.
+const coverShelfZones: ShelfZone[] = [
+  ...Array.from({ length: 5 }, (_, index) => ({
+    className: `shelf-zone-r1-c${index + 1}`,
+    capacity: 2,
+  })),
+  ...Array.from({ length: 6 }, (_, rowIndex) =>
+    Array.from({ length: 5 }, (_, columnIndex) => ({
+      className: `shelf-zone-r${rowIndex + 2}-c${columnIndex + 1}`,
+      capacity: 3,
+    })),
+  ).flat(),
+];
+
+const COVER_BOOKS_PER_BOOKCASE = coverShelfZones.reduce(
+  (total, zone) => total + zone.capacity,
+  0,
+);
+
 function frontendStatusFromBackend(status?: string | null, dnf?: boolean) {
   if (dnf) return "DNF";
 
@@ -1575,16 +1749,17 @@ function publicationYearFromDate(value?: string | null) {
 }
 
 function authorNamesFromList(
-  authors?: {
+  authors?: ({
     name?: string;
     firstName?: string;
     lastName?: string;
     penName?: string;
-  }[],
+  } | null)[],
 ) {
   return (
     authors
       ?.map((author) => {
+        if (!author) return "";
         const penName = author.penName?.trim();
         if (penName) return penName;
 
@@ -1602,10 +1777,10 @@ function authorNamesFromList(
   );
 }
 
-function genreNamesFromList(genres?: { name?: string }[]) {
+function genreNamesFromList(genres?: ({ name?: string } | null)[]) {
   return (
     genres
-      ?.map((genre) => genre.name)
+      ?.map((genre) => genre?.name)
       .filter(Boolean)
       .join(", ") || ""
   );
@@ -1767,6 +1942,14 @@ function migrateBook(book: Partial<ShelfBook> | BackendBook): ShelfBook {
     catalogProviderId:
       stringFromUnknown(backendBook.catalogProviderId) ||
       shelfBook.catalogProviderId,
+    shelfPosition:
+      typeof backendBook.shelfPosition === "number"
+        ? backendBook.shelfPosition
+        : shelfBook.shelfPosition,
+    coverShelfPosition:
+      typeof backendBook.coverShelfPosition === "number"
+        ? backendBook.coverShelfPosition
+        : shelfBook.coverShelfPosition,
     readingStatus: isBackendBook
       ? frontendStatusFromBackend(backendBook.currentStatus, backendBook.dnf)
       : shelfBook.readingStatus || "TO_READ",
@@ -1833,11 +2016,14 @@ function loadSavedBooks(): ShelfBook[] {
   }
 }
 
-function chunkBooksIntoBookcases(books: ShelfBook[]) {
+function chunkBooksIntoBookcases(
+  books: ShelfBook[],
+  booksPerBookcase = BOOKS_PER_BOOKCASE,
+) {
   const pages: ShelfBook[][] = [];
 
-  for (let i = 0; i < books.length; i += BOOKS_PER_BOOKCASE) {
-    pages.push(books.slice(i, i + BOOKS_PER_BOOKCASE));
+  for (let i = 0; i < books.length; i += booksPerBookcase) {
+    pages.push(books.slice(i, i + booksPerBookcase));
   }
 
   return pages.length > 0 ? pages : [[]];
@@ -1847,6 +2033,7 @@ function buildShelves(books: ShelfBook[], zones: ShelfZone[]) {
   let currentIndex = 0;
 
   return zones.map((zone) => {
+    const firstSlot = currentIndex + 1;
     const booksForZone = books.slice(
       currentIndex,
       currentIndex + zone.capacity,
@@ -1856,6 +2043,37 @@ function buildShelves(books: ShelfBook[], zones: ShelfZone[]) {
     return {
       ...zone,
       books: booksForZone,
+      slots: booksForZone.map((book, index) => ({
+        number: firstSlot + index,
+        book,
+      })),
+    };
+  });
+}
+
+function buildSlottedShelves(
+  books: ShelfBook[],
+  zones: ShelfZone[],
+  positionKey: "shelfPosition" | "coverShelfPosition",
+) {
+  const bySlot = new Map(
+    books
+      .filter((book) => Number.isInteger(book[positionKey]))
+      .map((book) => [book[positionKey] as number, book]),
+  );
+  let nextSlot = 1;
+
+  return zones.map((zone) => {
+    const firstSlot = nextSlot;
+    const slots: ShelfSlot[] = Array.from({ length: zone.capacity }, () => {
+      const number = nextSlot++;
+      return { number, book: bySlot.get(number) };
+    });
+    return {
+      ...zone,
+      firstSlot,
+      slots,
+      books: slots.flatMap((slot) => slot.book ? [slot.book] : []),
     };
   });
 }
@@ -1888,6 +2106,8 @@ function makeShelfBookFromNewBook(newBook: NewBook, color: string): ShelfBook {
     isbn13: newBook.isbn13,
     catalogProvider: newBook.catalogProvider,
     catalogProviderId: newBook.catalogProviderId,
+    shelfPosition: undefined,
+    coverShelfPosition: undefined,
     readingStatus: newBook.readingStatus || "TO_READ",
     format: newBook.format || "PHYSICAL",
     ownedStatus: newBook.ownedStatus || "",
@@ -1958,6 +2178,8 @@ function mapShelfBookToBackendBook(book: ShelfBook): BackendBook {
     narrator: book.narrator || null,
     catalogProvider: book.catalogProvider || null,
     catalogProviderId: book.catalogProviderId || null,
+    shelfPosition: book.shelfPosition ?? null,
+    coverShelfPosition: book.coverShelfPosition ?? null,
 
     personalNotes: null,
 
@@ -2046,8 +2268,18 @@ export default function BooksPage({
   const [currentBookcasePage, setCurrentBookcasePage] = useState(0);
 
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState("added-new");
+  const [sortBy, setSortBy] = useState("my-arrangement");
+  const [arrangingBooks, setArrangingBooks] = useState(false);
+  const [draggedBookId, setDraggedBookId] = useState<string | null>(null);
+  const [dragOverSlot, setDragOverSlot] = useState<number | null>(null);
+  const [dragPoint, setDragPoint] = useState({ x: 0, y: 0 });
+  const [arrangementSaving, setArrangementSaving] = useState(false);
+  const [arrangementMessage, setArrangementMessage] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(true);
+  const [displayMode, setDisplayMode] = useState<BookDisplayMode>(() => {
+    const saved = window.localStorage.getItem(LIBRARY_LANE_DISPLAY_MODE_KEY);
+    return saved === "cover" ? "cover" : "spine";
+  });
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [formatFilters, setFormatFilters] = useState<string[]>([]);
   const [romanceFilters, setRomanceFilters] = useState<string[]>([]);
@@ -2063,22 +2295,68 @@ export default function BooksPage({
   const [hiddenShelfBookId, setHiddenShelfBookId] = useState<string | null>(
     null,
   );
+  const [coverRepairBook, setCoverRepairBook] = useState<ShelfBook | null>(null);
+  const [coverCandidates, setCoverCandidates] = useState<CatalogBookResult[]>([]);
+  const [coverRepairLoading, setCoverRepairLoading] = useState(false);
+  const [coverRepairError, setCoverRepairError] = useState("");
+  const [customCoverUrl, setCustomCoverUrl] = useState("");
+  const [coverSavedNotice, setCoverSavedNotice] = useState("");
+  const [metadataRefreshMessage, setMetadataRefreshMessage] = useState("");
+  const [metadataRefreshing, setMetadataRefreshing] = useState(false);
+  const [libraryLoadError, setLibraryLoadError] = useState("");
+  const [libraryReloadToken, setLibraryReloadToken] = useState(0);
+  const [libraryLoading, setLibraryLoading] = useState(true);
   const shelfBookRefs = useRef(new Map<string, HTMLButtonElement>());
   const motionSequence = useRef(0);
   const bookMotionRef = useRef<BookMotion | null>(null);
+  const booksRef = useRef(books);
+  const arrangementPointer = useRef<{
+    bookId: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    grabX: number;
+    grabY: number;
+    dragging: boolean;
+    targetSlot: number | null;
+    removeListeners: (() => void) | null;
+  } | null>(null);
+
+  // Arrival animation timing belongs to the pending book id, not to every
+  // subsequent metadata refresh. Keep the latest collection available without
+  // making an in-flight sequence restart whenever `books` gets a new identity.
+  useEffect(() => {
+    booksRef.current = books;
+  }, [books]);
 
   useEffect(() => {
     bookMotionRef.current = bookMotion;
   }, [bookMotion]);
 
   useEffect(() => {
+    window.localStorage.setItem(LIBRARY_LANE_DISPLAY_MODE_KEY, displayMode);
+  }, [displayMode]);
+
+  useEffect(() => {
     async function loadBooksFromApi() {
       try {
+        setLibraryLoading(true);
+        setLibraryLoadError("");
         const apiBooks = await bookApi.getAll();
+        if (!Array.isArray(apiBooks)) {
+          throw new Error("The books endpoint did not return a list.");
+        }
 
         const booksWithExperiences = await Promise.all(
-          (apiBooks as BackendBook[]).map(async (backendBook) => {
-            const migratedBook = migrateBook(backendBook);
+          (apiBooks as (BackendBook | null)[]).map(async (backendBook) => {
+            if (!backendBook) return null;
+            let migratedBook: ShelfBook;
+            try {
+              migratedBook = migrateBook(backendBook);
+            } catch (error) {
+              console.error("A saved book could not be read", backendBook.id, error);
+              return null;
+            }
             const backendBookId = Number(migratedBook.id);
 
             if (!Number.isFinite(backendBookId) || backendBookId <= 0) {
@@ -2114,56 +2392,73 @@ export default function BooksPage({
           }),
         );
 
-        setBooks(booksWithExperiences);
-
-        // Recover missing covers and replace scan-oriented catalog art with a
-        // clean, front-facing exact-title/author physical cover. Metadata for
-        // the reader's selected edition remains untouched.
-        for (const book of booksWithExperiences) {
-          if (!coverNeedsRefinement(book)) continue;
-
-          const backendBookId = Number(book.id);
-          if (!Number.isFinite(backendBookId) || backendBookId <= 0) continue;
-
-          try {
-            const results = await catalogApi.searchBooks(
-              book.title,
-              undefined,
-              "TITLE",
-            );
-            const match = book.coverUrl
-              ? bestDisplayCoverMatch(book, results)
-              : bestCoverMatch(book, results);
-            if (!match?.coverImageUrl) continue;
-            if (match.coverImageUrl === book.coverUrl) continue;
-
-            const recoveredBook = {
-              ...book,
-              coverUrl: match.coverImageUrl,
-            };
-
-            await bookApi.update(
-              backendBookId,
-              mapShelfBookToBackendBook(recoveredBook),
-            );
-
-            setBooks((currentBooks) =>
-              currentBooks.map((currentBook) =>
-                currentBook.id === book.id ? recoveredBook : currentBook,
-              ),
-            );
-          } catch (error) {
-            console.warn("Could not recover cover for", book.title, error);
-          }
+        // Loading this page is intentionally read-only. Cover replacements
+        // happen only after the reader explicitly chooses one.
+        const readableBooks = booksWithExperiences.filter(
+          (book): book is ShelfBook => book !== null,
+        );
+        if (apiBooks.length > 0 && readableBooks.length === 0) {
+          throw new Error("Saved books were returned but none could be displayed.");
         }
+        const occupied = new Set(
+          readableBooks
+            .map((book) => book.shelfPosition)
+            .filter((slot): slot is number =>
+              typeof slot === "number" &&
+              Number.isInteger(slot) &&
+              slot >= 1 &&
+              slot <= BOOKS_PER_BOOKCASE),
+        );
+        const occupiedCovers = new Set(
+          readableBooks
+            .map((book) => book.coverShelfPosition)
+            .filter((slot): slot is number =>
+              typeof slot === "number" &&
+              Number.isInteger(slot) &&
+              slot >= 1 &&
+              slot <= COVER_BOOKS_PER_BOOKCASE),
+        );
+        let nextOpenSlot = 1;
+        let nextOpenCoverSlot = 1;
+        const claimedSlots = new Set<number>();
+        const claimedCoverSlots = new Set<number>();
+        setBooks(readableBooks.map((book) => {
+          let shelfPosition = book.shelfPosition;
+          let coverShelfPosition = book.coverShelfPosition;
+          if (!shelfPosition || claimedSlots.has(shelfPosition)) {
+            while ((occupied.has(nextOpenSlot) || claimedSlots.has(nextOpenSlot)) && nextOpenSlot <= BOOKS_PER_BOOKCASE) {
+              nextOpenSlot += 1;
+            }
+            shelfPosition = Math.min(nextOpenSlot, BOOKS_PER_BOOKCASE);
+          }
+          claimedSlots.add(shelfPosition);
+          if (!coverShelfPosition || claimedCoverSlots.has(coverShelfPosition)) {
+            while (
+              (occupiedCovers.has(nextOpenCoverSlot) || claimedCoverSlots.has(nextOpenCoverSlot)) &&
+              nextOpenCoverSlot <= COVER_BOOKS_PER_BOOKCASE
+            ) {
+              nextOpenCoverSlot += 1;
+            }
+            coverShelfPosition = Math.min(nextOpenCoverSlot, COVER_BOOKS_PER_BOOKCASE);
+          }
+          claimedCoverSlots.add(coverShelfPosition);
+          return { ...book, shelfPosition, coverShelfPosition };
+        }));
+
       } catch (error) {
         console.error("Failed to load books from API", error);
-        setBooks([]);
+        // A request or migration failure is not an empty library. Preserve the
+        // current view and tell the reader that saved records could not load.
+        setLibraryLoadError(
+          "Your saved books could not be displayed. They remain in your library. Please try loading the shelves again.",
+        );
+      } finally {
+        setLibraryLoading(false);
       }
     }
 
     loadBooksFromApi();
-  }, []);
+  }, [libraryReloadToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2227,12 +2522,13 @@ export default function BooksPage({
     seriesFilters,
     specialFilters,
     genreFilters,
+    displayMode,
   ]);
 
   useEffect(() => {
     if (!pendingArrivalId || bookMotionRef.current) return;
     const arrivalId = pendingArrivalId;
-    const arrivingBook = books.find((book) => book.id === arrivalId);
+    const arrivingBook = booksRef.current.find((book) => book.id === arrivalId);
     if (!arrivingBook) return;
     const arrivalBook = arrivingBook;
 
@@ -2260,14 +2556,15 @@ export default function BooksPage({
         stage: "preview",
         book: arrivalBook,
         shelfRect: motionRect(destination),
+        displayMode,
       });
-      await waitForMotion(480);
+      await waitForMotion(700);
       if (cancelled || sequence !== motionSequence.current) return;
 
       setBookMotion((current) =>
         current ? { ...current, stage: "travel" } : current,
       );
-      await waitForMotion(780);
+      await waitForMotion(1100);
       if (cancelled || sequence !== motionSequence.current) return;
 
       setBookMotion(null);
@@ -2280,7 +2577,7 @@ export default function BooksPage({
     return () => {
       cancelled = true;
     };
-  }, [pendingArrivalId, books]);
+  }, [pendingArrivalId, displayMode]);
 
   const genreOptions = useMemo(() => {
     return Array.from(
@@ -2335,6 +2632,16 @@ export default function BooksPage({
 
     return [...filtered].sort((a, b) => {
       switch (sortBy) {
+        case "my-arrangement": {
+          const positionKey = displayMode === "cover"
+            ? "coverShelfPosition"
+            : "shelfPosition";
+          const aPosition = a[positionKey] ?? Number.POSITIVE_INFINITY;
+          const bPosition = b[positionKey] ?? Number.POSITIVE_INFINITY;
+          return aPosition - bPosition ||
+            new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime() ||
+            a.id.localeCompare(b.id);
+        }
         case "added-old":
           return new Date(a.addedAt).getTime() - new Date(b.addedAt).getTime();
         case "title-az":
@@ -2346,11 +2653,22 @@ export default function BooksPage({
         case "author-za":
           return b.author.localeCompare(a.author);
         case "series-order":
-          return (
-            (a.seriesName || a.title).localeCompare(b.seriesName || b.title) ||
-            numberValue(a.seriesNumber) - numberValue(b.seriesNumber) ||
-            a.title.localeCompare(b.title)
-          );
+          {
+            const aHasSeries = Boolean(a.seriesName.trim());
+            const bHasSeries = Boolean(b.seriesName.trim());
+            if (aHasSeries !== bHasSeries) return aHasSeries ? -1 : 1;
+            if (!aHasSeries && !bHasSeries) return a.title.localeCompare(b.title);
+            const seriesComparison = a.seriesName.localeCompare(b.seriesName);
+            if (seriesComparison !== 0) return seriesComparison;
+            const aNumber = a.seriesNumber?.trim()
+              ? Number(a.seriesNumber)
+              : Number.POSITIVE_INFINITY;
+            const bNumber = b.seriesNumber?.trim()
+              ? Number(b.seriesNumber)
+              : Number.POSITIVE_INFINITY;
+            return aNumber - bNumber || a.title.localeCompare(b.title) ||
+              new Date(a.addedAt).getTime() - new Date(b.addedAt).getTime();
+          }
         case "status":
           return a.readingStatus.localeCompare(b.readingStatus);
         case "rating-high":
@@ -2399,6 +2717,7 @@ export default function BooksPage({
     });
   }, [
     books,
+    displayMode,
     searchTerm,
     sortBy,
     statusFilters,
@@ -2434,9 +2753,541 @@ export default function BooksPage({
     [books, spinePalettes],
   );
 
-  const bookcasePages = chunkBooksIntoBookcases(filteredAndSortedBooks);
+  // Covers and spines are different physical objects. Cover mode always uses
+  // its fixed two/three-book shelf geometry, including My arrangement.
+  const activeShelfZones = displayMode === "cover" ? coverShelfZones : shelfZones;
+  const activeBooksPerBookcase = activeShelfZones.reduce(
+    (total, zone) => total + zone.capacity,
+    0,
+  );
+  const bookcasePages = chunkBooksIntoBookcases(
+    filteredAndSortedBooks,
+    activeBooksPerBookcase,
+  );
   const currentBooksForBookcase = bookcasePages[currentBookcasePage] ?? [];
-  const shelves = buildShelves(currentBooksForBookcase, shelfZones);
+  const shelves = sortBy === "my-arrangement"
+    ? buildSlottedShelves(
+        currentBooksForBookcase,
+        activeShelfZones,
+        displayMode === "cover" ? "coverShelfPosition" : "shelfPosition",
+      )
+    : buildShelves(currentBooksForBookcase, activeShelfZones);
+
+  async function saveArrangement(nextBooks: ShelfBook[], previousBooks: ShelfBook[]) {
+    const positionKey = displayMode === "cover" ? "coverShelfPosition" : "shelfPosition";
+    const placements = nextBooks
+      .map((book) => ({
+        bookId: Number(book.id),
+        position: book[positionKey],
+      }))
+      .filter((placement): placement is { bookId: number; position: number } =>
+        Number.isFinite(placement.bookId) && Number.isInteger(placement.position));
+
+    setBooks(nextBooks);
+    setArrangementSaving(true);
+    setArrangementMessage("Saving your arrangement…");
+    try {
+      if (displayMode === "cover") {
+        await bookApi.updateCoverArrangement(placements);
+      } else {
+        await bookApi.updateArrangement(placements);
+      }
+      setArrangementMessage("Your bookshelf arrangement is saved.");
+    } catch (error) {
+      console.error("Failed to save shelf arrangement", error);
+      setBooks(previousBooks);
+      setArrangementMessage("That arrangement could not be saved. Your previous shelf order has been restored.");
+    } finally {
+      setArrangementSaving(false);
+    }
+  }
+
+  function moveBookToSlot(bookId: string, targetSlot: number) {
+    const positionKey = displayMode === "cover" ? "coverShelfPosition" : "shelfPosition";
+    const maximumPosition = displayMode === "cover"
+      ? COVER_BOOKS_PER_BOOKCASE
+      : BOOKS_PER_BOOKCASE;
+    if (arrangementSaving || targetSlot < 1 || targetSlot > maximumPosition) return;
+    const previousBooks = books;
+    const moving = books.find((book) => book.id === bookId);
+    if (!moving || moving[positionKey] === targetSlot) return;
+    const occupied = new Map<number, ShelfBook>();
+    books.forEach((book) => {
+      if (book.id !== bookId && Number.isInteger(book[positionKey])) {
+        occupied.set(book[positionKey] as number, book);
+      }
+    });
+
+    const nextPositions = new Map(books.map((book) => [book.id, book[positionKey]]));
+    if (occupied.has(targetSlot)) {
+      let emptySlot: number | null = null;
+      for (let distance = 1; distance < maximumPosition; distance += 1) {
+        const right = targetSlot + distance;
+        const left = targetSlot - distance;
+        if (right <= maximumPosition && !occupied.has(right)) {
+          emptySlot = right;
+          break;
+        }
+        if (left >= 1 && !occupied.has(left)) {
+          emptySlot = left;
+          break;
+        }
+      }
+      if (emptySlot === null) return;
+      if (emptySlot > targetSlot) {
+        for (let slot = emptySlot; slot > targetSlot; slot -= 1) {
+          const book = occupied.get(slot - 1);
+          if (book) nextPositions.set(book.id, slot);
+        }
+      } else {
+        for (let slot = emptySlot; slot < targetSlot; slot += 1) {
+          const book = occupied.get(slot + 1);
+          if (book) nextPositions.set(book.id, slot);
+        }
+      }
+    }
+    nextPositions.set(bookId, targetSlot);
+    const nextBooks = books.map((book) => ({
+      ...book,
+      [positionKey]: nextPositions.get(book.id),
+    }));
+    void saveArrangement(nextBooks, previousBooks);
+  }
+
+  function moveBookBy(bookId: string, change: number) {
+    if (arrangementSaving) return;
+    const book = books.find((candidate) => candidate.id === bookId);
+    if (!book) return;
+    const maximumPosition = displayMode === "cover"
+      ? COVER_BOOKS_PER_BOOKCASE
+      : BOOKS_PER_BOOKCASE;
+    const current = displayMode === "cover"
+      ? book.coverShelfPosition ?? 1
+      : book.shelfPosition ?? 1;
+    moveBookToSlot(bookId, Math.max(1, Math.min(maximumPosition, current + change)));
+  }
+
+  function shelfSlotAtPoint(x: number, y: number) {
+    const slot = document
+      .elementsFromPoint(x, y)
+      .find((element): element is HTMLElement =>
+        element instanceof HTMLElement && element.matches(".bookshelf-slot"),
+      );
+    const number = Number(slot?.dataset.shelfSlot);
+    return Number.isInteger(number) ? number : null;
+  }
+
+  function beginArrangementPointer(
+    book: ShelfBook,
+    event: PointerEvent<HTMLButtonElement>,
+  ) {
+    // Desktop mice use the dedicated mouse lifecycle below. Keeping this path
+    // for touch and pen avoids duplicate mouse + pointer drags in browsers that
+    // emit both event families for one physical gesture.
+    if (event.pointerType === "mouse" || !arrangingBooks || arrangementSaving) return;
+    const sourceRect = event.currentTarget.getBoundingClientRect();
+    const pointer = {
+      bookId: book.id,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      grabX: (event.clientX - sourceRect.left) / Math.max(1, sourceRect.width),
+      grabY: (event.clientY - sourceRect.top) / Math.max(1, sourceRect.height),
+      dragging: false,
+      targetSlot: null as number | null,
+      removeListeners: null as (() => void) | null,
+    };
+    arrangementPointer.current = pointer;
+
+    // Keep tracking after the pointer leaves the narrow book and enters an
+    // empty shelf slot. React rerenders the source when its lifted state begins,
+    // which can make element-level pointer capture unreliable.
+    const move = (pointerEvent: globalThis.PointerEvent) => {
+      if (pointerEvent.pointerId !== pointer.pointerId) return;
+      const distance = Math.hypot(
+        pointerEvent.clientX - pointer.startX,
+        pointerEvent.clientY - pointer.startY,
+      );
+      if (!pointer.dragging && distance < 7) return;
+      pointer.dragging = true;
+      pointerEvent.preventDefault();
+      setDraggedBookId(pointer.bookId);
+      const floatingWidth = displayMode === "cover" ? 78 : 42;
+      setDragPoint({
+        x: pointerEvent.clientX + (0.5 - pointer.grabX) * floatingWidth,
+        y: pointerEvent.clientY + (0.5 - pointer.grabY) * 120,
+      });
+
+      pointer.targetSlot = shelfSlotAtPoint(
+        pointerEvent.clientX,
+        pointerEvent.clientY,
+      );
+      setDragOverSlot(pointer.targetSlot);
+    };
+    const finish = (pointerEvent: globalThis.PointerEvent) => {
+      if (pointerEvent.pointerId !== pointer.pointerId) return;
+      if (arrangementPointer.current !== pointer) return;
+      arrangementPointer.current = null;
+      pointer.removeListeners?.();
+      if (pointer.dragging && pointer.targetSlot !== null) {
+        moveBookToSlot(pointer.bookId, pointer.targetSlot);
+      }
+      setDraggedBookId(null);
+      setDragOverSlot(null);
+    };
+    pointer.removeListeners = () => {
+      window.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", finish, true);
+      document.removeEventListener("pointercancel", finish, true);
+    };
+    window.addEventListener("pointermove", move, { passive: false });
+    document.addEventListener("pointerup", finish, true);
+    document.addEventListener("pointercancel", finish, true);
+  }
+
+  function beginArrangementMouse(
+    book: ShelfBook,
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) {
+    if (!arrangingBooks || arrangementSaving || event.button !== 0) return;
+    event.preventDefault();
+    arrangementPointer.current?.removeListeners?.();
+    const sourceRect = event.currentTarget.getBoundingClientRect();
+    const pointer = {
+      bookId: book.id,
+      pointerId: -1,
+      startX: event.clientX,
+      startY: event.clientY,
+      grabX: (event.clientX - sourceRect.left) / Math.max(1, sourceRect.width),
+      grabY: (event.clientY - sourceRect.top) / Math.max(1, sourceRect.height),
+      dragging: false,
+      targetSlot: null as number | null,
+      removeListeners: null as (() => void) | null,
+    };
+    arrangementPointer.current = pointer;
+
+    const move = (mouseEvent: globalThis.MouseEvent) => {
+      const distance = Math.hypot(
+        mouseEvent.clientX - pointer.startX,
+        mouseEvent.clientY - pointer.startY,
+      );
+      if (!pointer.dragging && distance < 7) return;
+      pointer.dragging = true;
+      mouseEvent.preventDefault();
+      setDraggedBookId(pointer.bookId);
+      const floatingWidth = displayMode === "cover" ? 78 : 42;
+      setDragPoint({
+        x: mouseEvent.clientX + (0.5 - pointer.grabX) * floatingWidth,
+        y: mouseEvent.clientY + (0.5 - pointer.grabY) * 120,
+      });
+
+      pointer.targetSlot = shelfSlotAtPoint(
+        mouseEvent.clientX,
+        mouseEvent.clientY,
+      );
+      setDragOverSlot(pointer.targetSlot);
+    };
+    const finish = () => {
+      if (arrangementPointer.current !== pointer) return;
+      arrangementPointer.current = null;
+      pointer.removeListeners?.();
+      if (pointer.dragging && pointer.targetSlot !== null) {
+        moveBookToSlot(pointer.bookId, pointer.targetSlot);
+      }
+      setDraggedBookId(null);
+      setDragOverSlot(null);
+    };
+    pointer.removeListeners = () => {
+      window.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", finish, true);
+    };
+    window.addEventListener("mousemove", move, { passive: false });
+    document.addEventListener("mouseup", finish, true);
+  }
+
+  function beginArranging() {
+    setSortBy("my-arrangement");
+    setSearchTerm("");
+    setStatusFilters([]);
+    setFormatFilters([]);
+    setRomanceFilters([]);
+    setSpiceFilters([]);
+    setSeriesFilters([]);
+    setSpecialFilters([]);
+    setGenreFilters([]);
+    setCurrentBookcasePage(0);
+    setArrangingBooks(true);
+    setArrangementMessage("Drag books into place, or focus one and use the arrow keys.");
+  }
+
+  function resetArrangement() {
+    const previousBooks = books;
+    const newestFirst = [...books].sort((a, b) =>
+      new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime() ||
+      a.id.localeCompare(b.id),
+    );
+    const positionKey = displayMode === "cover" ? "coverShelfPosition" : "shelfPosition";
+    void saveArrangement(newestFirst.map((book, index) => ({
+      ...book,
+      [positionKey]: index + 1,
+    })), previousBooks);
+  }
+
+  function handleArrangementKeyDown(
+    book: ShelfBook,
+    event: KeyboardEvent<HTMLButtonElement>,
+  ) {
+    if (!arrangingBooks) return;
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault();
+      moveBookToSlot(
+        book.id,
+        event.key === "Home"
+          ? 1
+          : displayMode === "cover" ? COVER_BOOKS_PER_BOOKCASE : BOOKS_PER_BOOKCASE,
+      );
+      return;
+    }
+    const rowStep = displayMode === "cover" ? 3 : 6;
+    const changes: Record<string, number> = {
+      ArrowLeft: -1,
+      ArrowRight: 1,
+      ArrowUp: -rowStep,
+      ArrowDown: rowStep,
+    };
+    const change = changes[event.key];
+    if (!change) return;
+    event.preventDefault();
+    moveBookBy(book.id, change);
+  }
+
+  function validateShelfCover(
+    book: ShelfBook,
+    image: HTMLImageElement,
+  ) {
+    if (!book.coverUrl) return;
+    const inspection = inspectLoadedCover(image);
+    coverValidationCache.set(book.coverUrl, Promise.resolve(inspection));
+    if (inspection.usable && !knownPlaceholderCoverPattern.test(book.coverUrl)) return;
+    image.hidden = true;
+    // Remove rejected art from the live view so it cannot enter the motion
+    // proxy. This does not write to the database or destroy the saved URL.
+    setBooks((current) => current.map((candidate) =>
+      candidate.id === book.id ? { ...candidate, coverUrl: undefined } : candidate
+    ));
+  }
+
+  async function openCoverRepair(book: ShelfBook) {
+    setCoverRepairBook(book);
+    setCoverCandidates([]);
+    setCoverRepairError("");
+    setCustomCoverUrl("");
+    setCoverRepairLoading(true);
+    try {
+      const resultGroups = await Promise.allSettled([
+        ...coverSearchRequests(book),
+      ]);
+      const results = expandCoverCandidates(
+        book,
+        resultGroups.flatMap((result) =>
+          result.status === "fulfilled" && Array.isArray(result.value)
+            ? result.value
+            : [],
+        ),
+      );
+      const possible = results.filter((candidate) =>
+        matchingCoverCandidate(book, candidate),
+      );
+      const inspected = await Promise.all(
+        possible.slice(0, 60).map(async (candidate) => ({
+          candidate,
+          inspection: await inspectCoverUrl(candidate.coverImageUrl!),
+        })),
+      );
+      const unique = new Map<string, CatalogBookResult>();
+      inspected
+        .filter(({ inspection }) => inspection.usable)
+        .sort((left, right) => {
+          const language = coverLanguageRank(left.candidate.language) -
+            coverLanguageRank(right.candidate.language);
+          if (language !== 0) return language;
+          const provider = Number(!left.candidate.provider.toLowerCase().includes("google")) -
+            Number(!right.candidate.provider.toLowerCase().includes("google"));
+          if (provider !== 0) return provider;
+          return right.inspection.width * right.inspection.height -
+            left.inspection.width * left.inspection.height;
+        })
+        .forEach(({ candidate }) => {
+          const identity = canonicalCoverIdentity(candidate.coverImageUrl!);
+          if (!unique.has(identity)) unique.set(identity, candidate);
+        });
+      setCoverCandidates([...unique.values()].slice(0, 12));
+      if (unique.size === 0) {
+        setCoverRepairError(
+          "No catalog covers passed every check. You can still provide a direct image address below.",
+        );
+      }
+    } catch (error) {
+      console.error("Cover search failed", error);
+      setCoverRepairError(
+        "The shelves could not search for alternate covers right now.",
+      );
+    } finally {
+      setCoverRepairLoading(false);
+    }
+  }
+
+  async function persistChosenCover(url: string) {
+    if (!coverRepairBook) return;
+    const inspection = await inspectCoverUrl(url);
+    if (!inspection.usable) {
+      setCoverRepairError("That image did not pass the final cover check.");
+      return;
+    }
+    const backendBookId = Number(coverRepairBook.id);
+    if (!Number.isFinite(backendBookId) || backendBookId <= 0) return;
+    const updatedBook = { ...coverRepairBook, coverUrl: url };
+    try {
+      await bookApi.update(backendBookId, mapShelfBookToBackendBook(updatedBook));
+      setBooks((current) => current.map((book) =>
+        book.id === updatedBook.id ? updatedBook : book
+      ));
+      setSelectedBook(updatedBook);
+      setCoverRepairBook(null);
+      setCoverSavedNotice(`Cover saved for ${updatedBook.title}.`);
+      window.setTimeout(() => setCoverSavedNotice(""), 3200);
+    } catch (error) {
+      console.error("Cover update failed", error);
+      setCoverRepairError(
+        "That cover could not be saved. Your current cover was preserved.",
+      );
+    }
+  }
+
+  async function refreshedMetadataFor(book: ShelfBook) {
+    const groups = await Promise.allSettled([
+      catalogApi.searchBooks(book.title, undefined, "TITLE"),
+      catalogApi.searchBooks(book.title, book.format === "MIXED"
+        ? undefined
+        : book.format as "PHYSICAL" | "EBOOK" | "AUDIOBOOK", "TITLE"),
+    ]);
+    const matches = groups.flatMap((group) =>
+      group.status === "fulfilled" ? group.value : []
+    ).filter((candidate) => matchesSavedWork(book, candidate));
+    const ranked = matches.sort((left, right) =>
+      catalogLanguageRank(left.language) - catalogLanguageRank(right.language) ||
+      Number(right.format === book.format) - Number(left.format === book.format) ||
+      catalogFactScore(right) - catalogFactScore(left)
+    );
+    if (!ranked.length) return null;
+
+    const resolved = await Promise.allSettled(
+      ranked.slice(0, 4).map((candidate) => catalogApi.resolveBook(candidate)),
+    );
+    const evidence = [
+      ...resolved.flatMap((result) => result.status === "fulfilled" ? [result.value] : []),
+      ...ranked,
+    ].filter((candidate) => matchesSavedWork(book, candidate));
+    const firstText = <K extends keyof CatalogBookResult>(key: K) =>
+      evidence.find((candidate) => String(candidate[key] ?? "").trim())?.[key];
+    const seriesEvidence = evidence
+      .filter((candidate) => candidate.seriesName?.trim())
+      .sort((left, right) =>
+        catalogLanguageRank(left.language) - catalogLanguageRank(right.language) ||
+        catalogFactScore(right) - catalogFactScore(left)
+      )[0];
+    const formatEvidence = evidence.find((candidate) => candidate.format === book.format) || evidence[0];
+    const factualGenres = [...new Set(evidence.flatMap((candidate) => candidate.genres))]
+      .slice(0, 8)
+      .join(", ");
+    const refreshed: ShelfBook = {
+      ...book,
+      author: formatEvidence.authors.length
+        ? formatEvidence.authors.join(", ")
+        : book.author,
+      subtitle: String(firstText("subtitle") || book.subtitle || ""),
+      description: String(firstText("description") || book.description || ""),
+      genre: factualGenres || book.genre,
+      seriesName: seriesEvidence?.seriesName || book.seriesName || "",
+      seriesNumber: seriesEvidence?.seriesNumber != null
+        ? String(seriesEvidence.seriesNumber)
+        : book.seriesNumber || "",
+      publisher: formatEvidence.publisher || book.publisher || "",
+      publicationYear: formatEvidence.publicationDate?.slice(0, 4) || book.publicationYear || "",
+      pageCount: formatEvidence.pageCount != null
+        ? String(formatEvidence.pageCount)
+        : book.pageCount || "",
+      audioLength: formatEvidence.audiobookLengthSeconds
+          ? `${Math.floor(formatEvidence.audiobookLengthSeconds / 3600)} hr ${Math.round((formatEvidence.audiobookLengthSeconds % 3600) / 60)} min`
+          : book.audioLength || "",
+      narrator: formatEvidence.narrators.length
+        ? formatEvidence.narrators.join(", ")
+        : book.narrator || "",
+      language: formatEvidence.language || book.language || "",
+      isbn10: formatEvidence.isbn10 || book.isbn10 || "",
+      isbn13: formatEvidence.isbn13 || book.isbn13 || "",
+      catalogProvider: formatEvidence.provider,
+      catalogProviderId: formatEvidence.providerId,
+      // Covers are reader-owned once a story is saved. Refresh never changes one.
+      coverUrl: book.coverUrl,
+      isSeries: (seriesEvidence?.seriesName || book.seriesName) ? "YES" : book.isSeries,
+    };
+    return refreshed;
+  }
+
+  async function refreshBookMetadata(book: ShelfBook, quiet = false) {
+    const refreshed = await refreshedMetadataFor(book);
+    if (!refreshed) {
+      if (!quiet) setMetadataRefreshMessage(`No trustworthy new details were found for ${book.title}.`);
+      return false;
+    }
+    const changed = JSON.stringify(mapShelfBookToBackendBook(refreshed)) !==
+      JSON.stringify(mapShelfBookToBackendBook(book));
+    if (!changed) {
+      if (!quiet) setMetadataRefreshMessage(`${book.title} is already up to date.`);
+      return false;
+    }
+    const id = Number(book.id);
+    if (!Number.isFinite(id) || id <= 0) return false;
+    await bookApi.update(id, mapShelfBookToBackendBook(refreshed));
+    setBooks((current) => current.map((candidate) =>
+      candidate.id === refreshed.id ? refreshed : candidate
+    ));
+    setSelectedBook((current) => current?.id === refreshed.id ? refreshed : current);
+    if (!quiet) setMetadataRefreshMessage(`Missing catalog details were added to ${book.title}. Your cover and reading history were preserved.`);
+    return true;
+  }
+
+  async function refreshLibraryMetadata() {
+    if (metadataRefreshing) return;
+    setMetadataRefreshing(true);
+    setMetadataRefreshMessage("Checking the library for trustworthy catalog improvements…");
+    let changed = 0;
+    try {
+      for (const book of books) {
+        if (await refreshBookMetadata(book, true)) changed += 1;
+      }
+      setMetadataRefreshMessage(
+        changed
+          ? `${changed} ${changed === 1 ? "book was" : "books were"} enriched. Covers and reader-created information were preserved.`
+          : "Every book is already using the trustworthy details currently available.",
+      );
+    } catch (error) {
+      console.error("Library metadata refresh failed", error);
+      setMetadataRefreshMessage("The refresh stopped because a catalog source was unavailable. No reader-created information was changed.");
+    } finally {
+      setMetadataRefreshing(false);
+    }
+  }
+
+  async function chooseCover(candidate: CatalogBookResult) {
+    if (!coverRepairBook || !candidate.coverImageUrl) return;
+    if (!matchingCoverCandidate(coverRepairBook, candidate)) {
+      setCoverRepairError("That cover does not belong to this exact title and author.");
+      return;
+    }
+    await persistChosenCover(candidate.coverImageUrl);
+  }
 
   async function handleShelfBookOpen(
     book: ShelfBook,
@@ -2455,27 +3306,28 @@ export default function BooksPage({
       stage: "lift",
       book,
       shelfRect: motionRect(element),
+      displayMode,
     });
-    await waitForMotion(240);
+    await waitForMotion(520);
     if (sequence !== motionSequence.current) return;
 
     setBookMotion((current) =>
       current ? { ...current, stage: "reveal" } : current,
     );
-    await waitForMotion(900);
+    await waitForMotion(1250);
     if (sequence !== motionSequence.current) return;
 
     setBookMotion((current) =>
       current ? { ...current, stage: "opening" } : current,
     );
-    await waitForMotion(800);
+    await waitForMotion(1650);
     if (sequence !== motionSequence.current) return;
 
     setSelectedBook(book);
     setBookMotion((current) =>
       current ? { ...current, stage: "handoff" } : current,
     );
-    await waitForMotion(280);
+    await waitForMotion(420);
     if (sequence !== motionSequence.current) return;
 
     setBookMotion(null);
@@ -2499,6 +3351,7 @@ export default function BooksPage({
       stage: "closing",
       book: closingBook,
       shelfRect: motionRect(destination),
+      displayMode,
     });
     // Paint the matching open-book proxy over the ledger before removing the
     // interactive modal. This prevents a blank or single-cover flash.
@@ -2509,27 +3362,25 @@ export default function BooksPage({
     );
     if (sequence !== motionSequence.current) return;
     setSelectedBook(null);
-    await waitForMotion(720);
+    await waitForMotion(1650);
     if (sequence !== motionSequence.current) return;
 
     setBookMotion((current) =>
       current ? { ...current, stage: "covering" } : current,
     );
-    // Pages finish closing before the outer cover is revealed. This prevents
-    // the cover from floating in front of a still-open ledger.
-    await waitForMotion(800);
+    await waitForMotion(1250);
     if (sequence !== motionSequence.current) return;
 
     setBookMotion((current) =>
       current ? { ...current, stage: "preview" } : current,
     );
-    await waitForMotion(420);
+    await waitForMotion(520);
     if (sequence !== motionSequence.current) return;
 
     setBookMotion((current) =>
       current ? { ...current, stage: "return" } : current,
     );
-    await waitForMotion(780);
+    await waitForMotion(1100);
     if (sequence !== motionSequence.current) return;
 
     setBookMotion(null);
@@ -2539,6 +3390,12 @@ export default function BooksPage({
 
   async function handleAddBook(newBook: NewBook) {
     const normalizedNewTitle = normalizeBookText(newBook.title);
+    const incomingAuthors = new Set(
+      (newBook.author || "")
+        .split(/[,;&]|\band\b/i)
+        .map(normalizeBookText)
+        .filter(Boolean),
+    );
 
     if (!normalizedNewTitle) return;
 
@@ -2547,23 +3404,48 @@ export default function BooksPage({
 
       const incomingIsbn = newBook.isbn13?.trim() || newBook.isbn10?.trim();
       const existingIsbn = book.isbn13?.trim() || book.isbn10?.trim();
+      const existingAuthors = (book.author || "")
+        .split(/[,;&]|\band\b/i)
+        .map(normalizeBookText)
+        .filter(Boolean);
+      const sameAuthor = existingAuthors.some((author) =>
+        incomingAuthors.has(author),
+      );
 
-      if (incomingIsbn && existingIsbn) return incomingIsbn === existingIsbn;
+      // One work owns all of its physical, e-book, and audiobook reading
+      // experiences. Different edition ISBNs must not create duplicate shelf
+      // books when the normalized title and author identify the same work.
+      if (sameAuthor) return true;
 
-      return (
-        book.format === (newBook.format || "PHYSICAL") &&
-        normalizeBookText(book.author) ===
-          normalizeBookText(newBook.author || "")
+      return Boolean(
+        incomingIsbn && existingIsbn && incomingIsbn === existingIsbn,
       );
     });
 
     if (alreadyExists) {
-      alert("This exact edition already exists in your library.");
+      alert(
+        "This story is already in your library. Open your existing book and create a new reading experience if you would like to read it again or in another format.",
+      );
       return;
     }
 
     const nextBookColor = mockColors[books.length % mockColors.length];
     const shelfBook = makeShelfBookFromNewBook(newBook, nextBookColor);
+    const occupiedSlots = new Set(books.map((book) => book.shelfPosition));
+    shelfBook.shelfPosition = Array.from(
+      { length: BOOKS_PER_BOOKCASE },
+      (_, index) => index + 1,
+    ).find((slot) => !occupiedSlots.has(slot));
+    const occupiedCoverSlots = new Set(books.map((book) => book.coverShelfPosition));
+    shelfBook.coverShelfPosition = Array.from(
+      { length: COVER_BOOKS_PER_BOOKCASE },
+      (_, index) => index + 1,
+    ).find((slot) => !occupiedCoverSlots.has(slot));
+
+    if (!shelfBook.shelfPosition) {
+      alert("This bookcase is full. Move to another bookcase before adding another story.");
+      return;
+    }
 
     try {
       const savedBackendBook = await bookApi.create(
@@ -2693,7 +3575,7 @@ export default function BooksPage({
       const updatedBooks = previousBooks.filter((book) => book.id !== bookId);
       const maxPage = Math.max(
         0,
-        Math.ceil(updatedBooks.length / BOOKS_PER_BOOKCASE) - 1,
+        Math.ceil(updatedBooks.length / activeBooksPerBookcase) - 1,
       );
 
       setCurrentBookcasePage((page) => Math.min(page, maxPage));
@@ -2742,13 +3624,41 @@ export default function BooksPage({
               <span>Every story I have added to Library Lane.</span>
             </div>
 
-            <button
-              className="books-add-button"
-              onClick={() => setAddBookOpen(true)}
-              style={{ backgroundImage: `url(${booksAddButtonFrame})` }}
-            >
-              + Add Book
-            </button>
+            <div className="books-header-actions">
+              <button
+                className="books-add-button"
+                onClick={() => setAddBookOpen(true)}
+                style={{ backgroundImage: `url(${booksAddButtonFrame})` }}
+              >
+                + Add Book
+              </button>
+
+              <button
+                type="button"
+                className="book-display-toggle"
+                aria-label={displayMode === "spine" ? "Show covers" : "Show spines"}
+                title={displayMode === "spine" ? "Show covers" : "Show spines"}
+                onClick={() => setDisplayMode((current) =>
+                  current === "spine" ? "cover" : "spine"
+                )}
+              >
+                <span className={`display-emblem display-emblem-${
+                  displayMode === "spine" ? "cover" : "spine"
+                }`} aria-hidden="true">
+                  {displayMode === "spine" ? (
+                    <svg viewBox="0 0 32 32">
+                      <path d="M7 4.5h17.5v23H7z" />
+                      <path d="M10 4.5v23M12.5 9h8M12.5 22h8" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 32 32">
+                      <path d="M10 4.5h12v23H10z" />
+                      <path d="M13 8v16M17 9v14" />
+                    </svg>
+                  )}
+                </span>
+              </button>
+            </div>
           </section>
 
           <section className="books-toolbar">
@@ -2786,7 +3696,10 @@ export default function BooksPage({
                 ariaLabel="Sort books"
                 value={sortBy}
                 options={sortOptions}
-                onChange={setSortBy}
+                onChange={(value) => {
+                  setSortBy(value);
+                  if (value !== "my-arrangement") setArrangingBooks(false);
+                }}
               />
             </div>
 
@@ -2809,7 +3722,9 @@ export default function BooksPage({
           </section>
 
           <div className="books-toolbar-meta" aria-live="polite">
-            {activeFilterCount > 0 || searchTerm ? (
+            {libraryLoading ? (
+              <>Opening your library…</>
+            ) : activeFilterCount > 0 || searchTerm ? (
               <>
                 Showing <strong>{filteredAndSortedBooks.length}</strong> of{" "}
                 <strong>{books.length}</strong> books
@@ -2820,6 +3735,54 @@ export default function BooksPage({
                 {books.length === 1 ? "book" : "books"}
               </>
             )}
+          </div>
+
+          {libraryLoadError && (
+            <div className="books-library-load-error" role="alert">
+              <span>{libraryLoadError}</span>
+              <button
+                type="button"
+                onClick={() => setLibraryReloadToken((current) => current + 1)}
+              >
+                Load the shelves again
+              </button>
+            </div>
+          )}
+
+          <div className="books-metadata-refresh" aria-live="polite">
+            <button
+              type="button"
+              onClick={() => void refreshLibraryMetadata()}
+              disabled={metadataRefreshing || libraryLoading || Boolean(libraryLoadError)}
+            >
+              {metadataRefreshing ? "Checking the shelves…" : "Refresh Library Details"}
+            </button>
+            {metadataRefreshMessage && <span>{metadataRefreshMessage}</span>}
+          </div>
+
+          <div className="books-arrangement-controls" aria-live="polite">
+            <button
+              type="button"
+              className={arrangingBooks ? "active" : ""}
+              onClick={() => arrangingBooks ? setArrangingBooks(false) : beginArranging()}
+              disabled={libraryLoading || Boolean(libraryLoadError) || arrangementSaving}
+              aria-pressed={arrangingBooks}
+            >
+              {arrangingBooks ? "Done Arranging" : "Arrange My Books"}
+            </button>
+            {arrangingBooks && (
+              <button
+                type="button"
+                className="books-arrangement-reset"
+                onClick={resetArrangement}
+                disabled={arrangementSaving}
+              >
+                {displayMode === "cover"
+                  ? "Gather Covers by Recently Added"
+                  : "Reset to Recently Added"}
+              </button>
+            )}
+            {arrangementMessage && <span>{arrangementMessage}</span>}
           </div>
 
           {filtersOpen && (
@@ -2907,7 +3870,7 @@ export default function BooksPage({
 
         <section className="bookcase-view">
           <section
-            className="bookshelf-page-background"
+            className={`bookshelf-page-background bookshelf-display-${displayMode} ${sortBy === "my-arrangement" ? "bookshelf-slotted" : ""}`}
             style={{ backgroundImage: `url(${bookshelfBackground})` }}
           >
             {shelves.map((shelf) => (
@@ -2918,10 +3881,20 @@ export default function BooksPage({
                     : ""
                 }`}
                 key={`${currentBookcasePage + 1}-${shelf.className}`}
+                style={{ "--shelf-slot-count": shelf.capacity } as CSSProperties}
               >
-                {shelf.books.map((book) => (
+                {shelf.slots.map(({ book, number }) => {
+                  return (
+                  <div
+                    className={`bookshelf-slot ${dragOverSlot === number ? "bookshelf-slot-target" : ""}`}
+                    data-shelf-slot={number}
+                    data-testid={`shelf-slot-${number}`}
+                    key={number}
+                    aria-label={arrangingBooks ? `Shelf position ${number}` : undefined}
+                  >
+                  {book ? (
                   <button
-                    className={`shelf-book shelf-book-illustrated spine-variant-${spineVariantForBook(
+                    className={`shelf-book shelf-book-${displayMode} shelf-book-illustrated spine-variant-${spineVariantForBook(
                       book,
                     )} spine-binding-${spineBindingForBook(
                       book,
@@ -2931,26 +3904,72 @@ export default function BooksPage({
                       hiddenShelfBookId === book.id
                         ? "shelf-book-in-motion"
                         : ""
+                    } ${arrangingBooks ? "shelf-book-arrangeable" : ""} ${
+                      draggedBookId === book.id ? "shelf-book-dragging" : ""
                     }`}
                     key={book.id}
                     ref={(element) => {
                       if (element) shelfBookRefs.current.set(book.id, element);
                       else shelfBookRefs.current.delete(book.id);
                     }}
-                    style={spineStyleForBook(
-                      book,
-                      spinePalettes[book.id],
-                      spineAssignments[book.id],
-                    )}
+                    style={{
+                      ...spineStyleForBook(
+                        book,
+                        spinePalettes[book.id],
+                        spineAssignments[book.id],
+                      ),
+                    } as CSSProperties}
                     title={book.title}
+                    data-arrangement-book={book.id}
+                    onPointerDown={(event) => beginArrangementPointer(book, event)}
+                    onMouseDown={(event) => beginArrangementMouse(book, event)}
+                    onKeyDown={(event) => handleArrangementKeyDown(book, event)}
                     onClick={(event) =>
-                      void handleShelfBookOpen(book, event.currentTarget)
+                      arrangingBooks
+                        ? event.currentTarget.focus()
+                        : void handleShelfBookOpen(book, event.currentTarget)
                     }
                     disabled={bookMotion !== null}
                     aria-label={`Open ${book.title}${
                       book.author ? ` by ${book.author}` : ""
-                    }`}
+                    }${arrangingBooks ? ". Use arrow keys to move." : ""}`}
                   >
+                    {displayMode === "cover" ? (
+                      <span
+                        className={`shelf-book-cover-shell${book.coverUrl ? " shelf-book-cover-shell-has-art" : ""}`}
+                        aria-hidden="true"
+                      >
+                        {book.coverUrl ? (
+                          <img
+                            src={book.coverUrl}
+                            alt=""
+                            crossOrigin="anonymous"
+                            loading="lazy"
+                            onLoad={(event) => {
+                              const image = event.currentTarget;
+                              const ratio = image.naturalWidth / Math.max(1, image.naturalHeight);
+                              image.parentElement?.style.setProperty(
+                                "--shelf-cover-ratio",
+                                String(Math.min(0.8, Math.max(0.5, ratio))),
+                              );
+                              validateShelfCover(book, image);
+                            }}
+                            onError={(event) => {
+                              event.currentTarget.hidden = true;
+                              setBooks((current) => current.map((candidate) =>
+                                candidate.id === book.id
+                                  ? { ...candidate, coverUrl: undefined }
+                                  : candidate
+                              ));
+                            }}
+                          />
+                        ) : null}
+                        <span className="shelf-book-cover-fallback">
+                          <strong>{book.title}</strong>
+                          {book.author && <small>{book.author}</small>}
+                        </span>
+                      </span>
+                    ) : (
                     <span className="shelf-book-shell" aria-hidden="true">
                       <span className="shelf-book-edge" />
                       <span className="shelf-book-band shelf-book-band-top" />
@@ -2964,15 +3983,46 @@ export default function BooksPage({
                         </span>
                       )}
                     </span>
+                    )}
                     <span className="shelf-book-tooltip" role="tooltip">
                       <strong>{book.title}</strong>
                       {book.author && <small>{book.author}</small>}
                     </span>
                   </button>
-                ))}
+                  ) : (
+                    arrangingBooks && (
+                      <span className="bookshelf-empty-slot" aria-hidden="true" />
+                    )
+                  )}
+                  </div>
+                  );
+                })}
               </div>
             ))}
           </section>
+
+          {draggedBookId && (() => {
+            const draggedBook = books.find((book) => book.id === draggedBookId);
+            if (!draggedBook) return null;
+            return (
+              <div
+                className={`arrangement-floating-book arrangement-floating-${displayMode}`}
+                style={{ left: dragPoint.x, top: dragPoint.y }}
+                data-testid="arrangement-floating-book"
+                aria-hidden="true"
+              >
+                {displayMode === "cover" && draggedBook.coverUrl ? (
+                  <img src={draggedBook.coverUrl} alt="" />
+                ) : (
+                  <span>
+                    <strong>{draggedBook.title}</strong>
+                    {draggedBook.author && <small>{draggedBook.author}</small>}
+                  </span>
+                )}
+                <i /><i /><i />
+              </div>
+            );
+          })()}
 
           {bookcasePages.length > 1 && (
             <div className="bookcase-pagination">
@@ -3008,9 +4058,102 @@ export default function BooksPage({
           book={selectedBook}
           onClose={() => void handleBookDetailsClose()}
           onSave={handleSaveBook}
+          onRefreshMetadata={(book) => void refreshBookMetadata(book)}
           onReadingExperiencesChange={handleReadingExperiencesChange}
           onDelete={handleDeleteBook}
+          onRepairCover={(book) => void openCoverRepair(book)}
         />
+        {coverRepairBook && (
+          <div
+            className="cover-repair-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Choose a cover for ${coverRepairBook.title}`}
+          >
+            <section className="cover-repair-panel">
+              <header>
+                <div>
+                  <small>Cover Gallery</small>
+                  <h2>Choose the edition that belongs on your shelf</h2>
+                  <p>
+                    Nothing changes until you select a cover. Your reading
+                    history and book details stay together.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCoverRepairBook(null)}
+                  aria-label="Close cover gallery"
+                >
+                  ×
+                </button>
+              </header>
+              {coverRepairLoading && (
+                <p className="cover-repair-status">Searching the shelves…</p>
+              )}
+              {coverRepairError && (
+                <p className="cover-repair-status">{coverRepairError}</p>
+              )}
+              <div className="cover-repair-grid">
+                {coverRepairBook.coverUrl &&
+                  !knownPlaceholderCoverPattern.test(coverRepairBook.coverUrl) && (
+                    <button
+                      type="button"
+                      className="cover-repair-choice current"
+                      onClick={() => setCoverRepairBook(null)}
+                    >
+                      <img
+                        src={coverRepairBook.coverUrl}
+                        alt={`Current cover of ${coverRepairBook.title}`}
+                      />
+                      <span>Keep current cover</span>
+                    </button>
+                  )}
+                {coverCandidates.map((candidate) => (
+                  <button
+                    type="button"
+                    className="cover-repair-choice"
+                    key={`${candidate.provider}-${candidate.providerId}-${candidate.coverImageUrl}`}
+                    onClick={() => void chooseCover(candidate)}
+                  >
+                    <img
+                      src={candidate.coverImageUrl!}
+                      alt={`${candidate.title} cover from ${candidate.provider}`}
+                    />
+                    <span>
+                      {coverEditionLabel(coverRepairBook, candidate)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="cover-repair-custom">
+                <label htmlFor="custom-cover-url">Have a special-edition cover?</label>
+                <p>Paste a direct image address. It will be checked before anything is saved.</p>
+                <div>
+                  <input
+                    id="custom-cover-url"
+                    type="url"
+                    value={customCoverUrl}
+                    onChange={(event) => setCustomCoverUrl(event.target.value)}
+                    placeholder="https://…/cover.jpg"
+                  />
+                  <button
+                    type="button"
+                    disabled={!customCoverUrl.trim()}
+                    onClick={() => void persistChosenCover(customCoverUrl.trim())}
+                  >
+                    Use this cover
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
+        {coverSavedNotice && (
+          <div className="cover-saved-notice" role="status">
+            {coverSavedNotice} No additional save is needed.
+          </div>
+        )}
         <BookMotionLayer motion={bookMotion} />
       </main>
     </div>

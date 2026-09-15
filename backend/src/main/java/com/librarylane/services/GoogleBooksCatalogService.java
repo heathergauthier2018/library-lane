@@ -60,7 +60,9 @@ public class GoogleBooksCatalogService {
             case SERIES -> query;
         };
 
-        String normalizedFormat = normalize(requestedFormat);
+        String normalizedFormat = requestedFormat == null
+                ? ""
+                : requestedFormat.trim().toUpperCase(Locale.ROOT);
         List<ScoredResult> candidates = new ArrayList<>();
         collectCandidates(
                 fetch(providerQuery, requestedFormat),
@@ -124,7 +126,11 @@ public class GoogleBooksCatalogService {
         if (response == null || !response.path("items").isArray()) return;
 
         for (JsonNode item : response.path("items")) {
-            CatalogBookResult result = mapResult(item, searchBy, query);
+            CatalogBookResult result = mapResult(
+                    item,
+                    searchBy,
+                    query,
+                    normalizedFormat);
 
             if ("AUDIOBOOK".equals(normalizedFormat)) continue;
 
@@ -146,7 +152,7 @@ public class GoogleBooksCatalogService {
                 .queryParam("orderBy", "relevance")
                 .queryParam("maxResults", MAX_RESULTS);
 
-        if ("EBOOK".equals(normalize(requestedFormat))) {
+        if ("EBOOK".equalsIgnoreCase(requestedFormat)) {
             builder.queryParam("filter", "ebooks");
         }
         if (!apiKey.isBlank()) builder.queryParam("key", apiKey);
@@ -165,10 +171,15 @@ public class GoogleBooksCatalogService {
     private CatalogBookResult mapResult(
             JsonNode item,
             SearchBy searchBy,
-            String query) {
+            String query,
+            String requestedFormat) {
 
         JsonNode volume = item.path("volumeInfo");
-        boolean isEbook = item.path("saleInfo").path("isEbook").asBoolean(false);
+        // Google's filter=ebooks response occasionally omits or contradicts
+        // saleInfo.isEbook. The filtered request itself is authoritative; if
+        // we ignore it, a real e-book becomes a second physical lead result.
+        boolean isEbook = "EBOOK".equals(requestedFormat)
+                || item.path("saleInfo").path("isEbook").asBoolean(false);
         String format = isEbook ? "EBOOK" : "PHYSICAL";
 
         String cover = firstText(
@@ -178,7 +189,13 @@ public class GoogleBooksCatalogService {
                 volume.path("imageLinks").path("thumbnail"),
                 volume.path("imageLinks").path("smallThumbnail")
         );
-        if (cover != null) cover = cover.replace("http://", "https://");
+        if (cover != null) {
+            cover = cover
+                    .replace("http://", "https://")
+                    .replace("&edge=curl", "")
+                    .replace("?edge=curl&", "?")
+                    .replaceAll("([?&])zoom=1(?=&|$)", "$1zoom=2");
+        }
 
         String isbn10 = null;
         String isbn13 = null;

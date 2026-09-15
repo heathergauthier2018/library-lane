@@ -406,6 +406,8 @@ public class AppleAudiobookCatalogService {
         String description = cleanAppleDescription(
                 firstText(item, "description", "longDescription"));
         String releaseDate = firstText(item, "releaseDate");
+        String publisher = publisherFromCopyright(
+                firstText(item, "copyright"));
         String artworkUrl = firstText(
                 item,
                 "artworkUrl600",
@@ -440,7 +442,7 @@ public class AppleAudiobookCatalogService {
                 author.isBlank() ? List.of() : List.of(author),
                 genre.isBlank() ? List.of() : List.of(genre),
                 description,
-                null,
+                  publisher,
                 blankToNull(releaseDate),
                 null,
                 lengthSeconds,
@@ -691,6 +693,18 @@ public class AppleAudiobookCatalogService {
         return value == null ? "" : value.trim();
     }
 
+    private static String publisherFromCopyright(String value) {
+        String cleaned = safeText(value);
+        if (cleaned.isBlank()) return null;
+
+        cleaned = cleaned.replaceFirst(
+                        "(?i)^(?:(?:\\x{00A9}|\\x{2117}|\\([cp]\\)|copyright)"
+                                + "\\s*)?(?:\\d{4}\\s*)?(?:by\\s+)?",
+                        "")
+                .trim();
+
+        return blankToNull(cleaned);
+    }
     private static String blankToNull(String value) {
         String cleaned = safeText(value);
         return cleaned.isBlank() ? null : cleaned;

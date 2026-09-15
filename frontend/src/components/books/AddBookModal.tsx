@@ -27,18 +27,6 @@ import {
 
 export type { NewBook } from "./bookLedgerConfig";
 
-const SPOTIFY_FULL_LOGO =
-  "https://developer-assets.spotifycdn.com/images/guidelines/design/full-logo-framed.svg";
-
-function spotifyAudiobookUrl(providerId: string) {
-  const legacyAlbumPrefix = "album:";
-  if (providerId.startsWith(legacyAlbumPrefix)) {
-    const albumId = providerId.slice(legacyAlbumPrefix.length);
-    return `https://open.spotify.com/album/${encodeURIComponent(albumId)}`;
-  }
-  return `https://open.spotify.com/audiobook/${encodeURIComponent(providerId)}`;
-}
-
 function catalogSearchField(field: string): CatalogSearchField {
   if (field === "author") return "AUTHOR";
   if (field === "seriesName") return "SERIES";
@@ -92,6 +80,115 @@ function durationLabel(totalSeconds?: number | null) {
   return [hours ? `${hours}h` : "", minutes ? `${minutes}m` : ""]
     .filter(Boolean)
     .join(" ");
+}
+
+const rejectedCoverUrl =
+  /(?:image[_-]?not[_-]?available|no[_-]?image|no[_-]?cover|placeholder|default[_-]?cover|missing[_-]?cover)/i;
+
+function normalizedCatalogText(value?: string | null) {
+  return (value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function sameCatalogWork(
+  reference: CatalogBookResult,
+  candidate: CatalogBookResult,
+) {
+  const expectedTitle = normalizedCatalogText(reference.title);
+  const candidateTitle = normalizedCatalogText(candidate.title);
+  if (
+    candidateTitle !== expectedTitle &&
+    !candidateTitle.startsWith(`${expectedTitle} `)
+  ) return false;
+
+  const expectedAuthors = new Set(
+    reference.authors.map(normalizedCatalogText).filter(Boolean),
+  );
+  const candidateAuthors = candidate.authors
+    .map(normalizedCatalogText)
+    .filter(Boolean);
+  return expectedAuthors.size === 0 || candidateAuthors.length === 0 ||
+    candidateAuthors.some((author) => expectedAuthors.has(author));
+}
+
+function coverIdentity(url: string) {
+  return url
+    .replace(/^http:/i, "https:")
+    .replace(/([?&])(?:zoom|w|width|height|img)=[^&]*/gi, "$1")
+    .replace(/[?&]+$/, "");
+}
+
+function preferredCoverUrl(url: string) {
+  if (/books\.google/i.test(url)) {
+    const upgraded = url
+      .replace(/^http:/i, "https:")
+      .replace(/([?&])zoom=\d+/i, "$1zoom=2")
+      .replace(/([?&])edge=curl&?/i, "$1")
+      .replace(/[?&]+$/, "");
+    return upgraded.includes("zoom=")
+      ? upgraded
+      : `${upgraded}${upgraded.includes("?") ? "&" : "?"}zoom=2`;
+  }
+  return url.replace(/^http:/i, "https:");
+}
+
+function validateAddCover(url: string) {
+  return new Promise<boolean>((resolve) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => {
+      if (image.naturalWidth < 180 || image.naturalHeight < 240) {
+        resolve(false);
+        return;
+      }
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = 20;
+        canvas.height = 30;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (!context) return resolve(true);
+        context.drawImage(image, 0, 0, 20, 30);
+        const pixels = context.getImageData(0, 0, 20, 30).data;
+        let white = 0;
+        let transparent = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          if (pixels[index] > 232 && pixels[index + 1] > 232 && pixels[index + 2] > 232) white += 1;
+          if (pixels[index + 3] < 230) transparent += 1;
+        }
+        const count = pixels.length / 4;
+        resolve(white / count < 0.78 && transparent / count < 0.08);
+      } catch {
+        resolve(true);
+      }
+    };
+    image.onerror = () => resolve(false);
+    image.src = url;
+  });
+}
+
+function preferredLanguageRank(language?: string | null) {
+  const normalized = normalizedCatalogText(language);
+  if (["en", "eng", "english"].includes(normalized)) return 0;
+  if (!normalized) return 1;
+  return 2;
+}
+
+function editionCompleteness(result: CatalogBookResult) {
+  return [
+    result.coverImageUrl,
+    result.description,
+    result.publisher,
+    result.publicationDate,
+    result.pageCount,
+    result.audiobookLengthSeconds,
+    result.seriesName,
+    result.seriesNumber,
+    result.isbn13,
+  ].filter((value) => value !== null && value !== undefined && value !== "").length;
 }
 
 type AddBookModalProps = {
@@ -1055,6 +1152,13 @@ export default function AddBookModal({
   const [catalogSearching, setCatalogSearching] = useState(false);
   const [catalogMessage, setCatalogMessage] = useState("");
   const [openDropdown, setOpenDropdown] = useState("");
+  const [selectedCatalogWork, setSelectedCatalogWork] =
+    useState<CatalogBookResult | null>(null);
+  const [formatResolving, setFormatResolving] = useState(false);
+  const [addCoverCandidates, setAddCoverCandidates] =
+    useState<CatalogBookResult[]>([]);
+  const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  const [coverSearchMessage, setCoverSearchMessage] = useState("");
 
   const ledgerPages = useMemo(() => {
     return getLedgerPages(book);
@@ -1063,7 +1167,7 @@ export default function AddBookModal({
   useEffect(() => {
     const query = catalogQuery.trim();
 
-    if (query.length < 3) return;
+    if (query.length < 3 || !activeCatalogField) return;
 
     let active = true;
     const timeout = window.setTimeout(async () => {
@@ -1112,9 +1216,175 @@ export default function AddBookModal({
   }, [catalogQuery, activeCatalogField]);
 
   useEffect(() => {
+    if (!selectedCatalogWork) return;
+    const requestedFormat = book.format as CatalogBookFormat;
+    if (frontendFormat(selectedCatalogWork.format) === requestedFormat) return;
+
+    let active = true;
+    void (async () => {
+      try {
+        const matches = await catalogApi.searchBooks(
+          selectedCatalogWork.title,
+          requestedFormat,
+          "TITLE",
+        );
+        const matchingEdition = matches
+          .filter((candidate) => sameCatalogWork(selectedCatalogWork, candidate))
+          .sort((left, right) =>
+            preferredLanguageRank(left.language) - preferredLanguageRank(right.language) ||
+            editionCompleteness(right) - editionCompleteness(left)
+          )[0];
+        if (!matchingEdition || !active) {
+          setCatalogMessage(
+            `No ${requestedFormat.toLowerCase().replace("ebook", "e-book")} edition was found. Your story details were preserved for manual entry.`,
+          );
+          return;
+        }
+        let resolved = matchingEdition;
+        try {
+          resolved = await catalogApi.resolveBook(matchingEdition);
+        } catch (error) {
+          console.warn("Format-specific catalog enrichment failed", error);
+        }
+        if (!active) return;
+        const publisher = resolved.publisher?.trim() || "";
+        setBook((previous) => ({
+          ...previous,
+          format: requestedFormat,
+          publisher: publisher ? "OTHER" : previous.publisher,
+          publisherOther: publisher || previous.publisherOther,
+          publicationYear:
+            resolved.publicationDate?.slice(0, 4) || previous.publicationYear,
+          pageCount:
+            requestedFormat === "AUDIOBOOK"
+              ? ""
+              : resolved.pageCount
+                ? String(resolved.pageCount)
+                : previous.pageCount,
+          audioLength:
+            requestedFormat === "AUDIOBOOK"
+              ? durationLabel(resolved.audiobookLengthSeconds)
+              : "",
+          narrator:
+            requestedFormat === "AUDIOBOOK"
+              ? resolved.narrators.join(", ")
+              : "",
+          description: resolved.description || previous.description,
+          coverUrl: resolved.coverImageUrl || previous.coverUrl,
+          language: resolved.language || previous.language,
+          isbn10: resolved.isbn10 || "",
+          isbn13: resolved.isbn13 || "",
+          catalogProvider: resolved.provider,
+          catalogProviderId: resolved.providerId,
+        }));
+        setSelectedCatalogWork(resolved);
+        setCatalogMessage("");
+      } catch (error) {
+        console.warn("Format-specific catalog lookup failed", error);
+        if (active) {
+          setCatalogMessage(
+            "That format could not be refreshed. Your existing story details were preserved.",
+          );
+        }
+      } finally {
+        if (active) setFormatResolving(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [book.format, selectedCatalogWork]);
+
+  useEffect(() => {
+    if (!selectedCatalogWork) return;
+    let active = true;
+    void Promise.allSettled(
+      ([undefined, "PHYSICAL", "EBOOK", "AUDIOBOOK"] as const).map((format) =>
+        catalogApi.searchBooks(selectedCatalogWork.title, format, "TITLE"),
+      ),
+    ).then(async (groups) => {
+      if (!active) return;
+      const allResults = groups.flatMap((group) =>
+        group.status === "fulfilled" ? group.value : [],
+      );
+      const candidates = allResults.filter((candidate) =>
+        Boolean(candidate.coverImageUrl) &&
+        !rejectedCoverUrl.test(candidate.coverImageUrl || "") &&
+        sameCatalogWork(selectedCatalogWork, candidate),
+      ).map((candidate) => ({
+        ...candidate,
+        coverImageUrl: preferredCoverUrl(candidate.coverImageUrl || ""),
+      }));
+      const inspectedCandidates = (
+        await Promise.all(candidates.slice(0, 60).map(async (candidate) => ({
+          candidate,
+          usable: await validateAddCover(candidate.coverImageUrl || ""),
+        })))
+      ).filter(({ usable }) => usable).map(({ candidate }) => candidate);
+      if (!active) return;
+      const unique = new Map<string, CatalogBookResult>();
+      inspectedCandidates.forEach((candidate) => {
+        if (!candidate.coverImageUrl || rejectedCoverUrl.test(candidate.coverImageUrl)) return;
+        const identity = coverIdentity(candidate.coverImageUrl);
+        if (!unique.has(identity)) unique.set(identity, candidate);
+      });
+      const choices = [...unique.values()]
+        .sort((left, right) =>
+          preferredLanguageRank(left.language) - preferredLanguageRank(right.language) ||
+          editionCompleteness(right) - editionCompleteness(left)
+        )
+        .slice(0, 16);
+      setAddCoverCandidates(choices);
+      setCoverSearchMessage(
+        choices.length
+          ? ""
+          : "No validated catalog cover was found. A solid Library Lane binding will be used.",
+      );
+      const matchingResults = allResults.filter((candidate) =>
+        sameCatalogWork(selectedCatalogWork, candidate),
+      );
+      const workDescription = matchingResults
+        .filter((candidate) => Boolean(candidate.description?.trim()))
+        .sort((left, right) =>
+          preferredLanguageRank(left.language) - preferredLanguageRank(right.language) ||
+          editionCompleteness(right) - editionCompleteness(left)
+        )[0]?.description;
+      const factualSupplement = matchingResults
+        .filter((candidate) => frontendFormat(candidate.format) === book.format)
+        .sort((left, right) =>
+          preferredLanguageRank(left.language) - preferredLanguageRank(right.language) ||
+          editionCompleteness(right) - editionCompleteness(left)
+        )[0];
+      const currentCoverIsValidated = choices.some(
+        (candidate) => candidate.coverImageUrl === book.coverUrl,
+      );
+      setBook((previous) => ({
+        ...previous,
+        coverUrl: currentCoverIsValidated
+          ? previous.coverUrl
+          : choices[0]?.coverImageUrl || "",
+        // A synopsis describes the work, so it is safe to borrow from another
+        // matching edition when the selected record omitted it.
+        description: previous.description || workDescription || "",
+        pageCount: previous.pageCount ||
+          (factualSupplement?.pageCount ? String(factualSupplement.pageCount) : ""),
+        seriesName: previous.seriesName ||
+          displaySeriesName(factualSupplement?.seriesName),
+        seriesNumber: previous.seriesNumber ||
+          (factualSupplement?.seriesNumber != null
+            ? String(factualSupplement.seriesNumber)
+            : ""),
+      }));
+    });
+    return () => {
+      active = false;
+    };
+  }, [book.coverUrl, book.format, selectedCatalogWork]);
+
+  useEffect(() => {
     if (!activeCatalogField) return;
 
-    function dismissCatalog(event: PointerEvent) {
+    function dismissCatalog(event: globalThis.MouseEvent) {
       const target = event.target;
       if (!(target instanceof Element)) return;
       if (target.closest(".catalog-search-field-active")) return;
@@ -1133,11 +1403,14 @@ export default function AddBookModal({
       setCatalogSearching(false);
     }
 
-    document.addEventListener("pointerdown", dismissCatalog);
+    // Dismiss after the target's click has completed. Using pointerdown here
+    // could rerender the ledger between press and release, detaching action
+    // buttons before their click handlers had a chance to run.
+    document.addEventListener("click", dismissCatalog);
     document.addEventListener("keydown", dismissWithEscape);
 
     return () => {
-      document.removeEventListener("pointerdown", dismissCatalog);
+      document.removeEventListener("click", dismissCatalog);
       document.removeEventListener("keydown", dismissWithEscape);
     };
   }, [activeCatalogField]);
@@ -1187,6 +1460,9 @@ export default function AddBookModal({
   }
 
   function updateField(field: string, value: string) {
+    if (field === "format" && book.format !== value) {
+      setFormatResolving(Boolean(selectedCatalogWork));
+    }
     setBook((previous) => {
       let next = previous;
 
@@ -1219,18 +1495,10 @@ export default function AddBookModal({
       if (field === "format" && previous.format !== value) {
         next = {
           ...next,
-          catalogProvider: "",
-          catalogProviderId: "",
           editionFormat: "",
-          isbn10: "",
-          isbn13: "",
           pageCount: value === "AUDIOBOOK" ? "" : next.pageCount,
           audioLength: value === "AUDIOBOOK" ? next.audioLength : "",
           narrator: value === "AUDIOBOOK" ? next.narrator : "",
-          // A catalog synopsis can describe a particular audiobook production
-          // rather than the underlying work. Do not carry it into another
-          // manually selected format.
-          description: previous.catalogProviderId ? "" : next.description,
         };
       }
 
@@ -1306,6 +1574,8 @@ export default function AddBookModal({
       isSeries: seriesName ? "YES" : "",
       readingStatus: previous.readingStatus,
     }));
+    setSelectedCatalogWork(result);
+    setCoverSearchMessage("Searching for trustworthy covers…");
 
     setCatalogQuery("");
     setActiveCatalogField("");
@@ -1323,6 +1593,9 @@ export default function AddBookModal({
     setLedgerPage(0);
     setFocusedPrompt(null);
     setOpenDropdown("");
+    setSelectedCatalogWork(null);
+    setAddCoverCandidates([]);
+    setCoverPickerOpen(false);
     onClose();
   }
 
@@ -1336,6 +1609,9 @@ export default function AddBookModal({
     setCatalogSearching(false);
     setCatalogQuery("");
     setOpenDropdown("");
+    setSelectedCatalogWork(null);
+    setAddCoverCandidates([]);
+    setCoverPickerOpen(false);
     onClose();
   }
 
@@ -1420,20 +1696,6 @@ export default function AddBookModal({
           totalPages={totalLedgerPages}
         />
 
-        {book.catalogProvider?.toLowerCase().includes("spotify audiobook") &&
-          book.catalogProviderId && (
-            <a
-              className="spotify-audiobook-attribution"
-              href={spotifyAudiobookUrl(book.catalogProviderId)}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="Open this audiobook on Spotify"
-            >
-              <img src={SPOTIFY_FULL_LOGO} alt="Spotify" />
-              <span>Open audiobook</span>
-            </a>
-          )}
-
         <div className="add-book-actions add-book-actions-left">
           <button
             type="button"
@@ -1443,6 +1705,19 @@ export default function AddBookModal({
           >
             Close
           </button>
+
+          {selectedCatalogWork && (
+            <button
+              type="button"
+              className="add-book-frame-button close-book-button choose-cover-action"
+              onClick={() => setCoverPickerOpen(true)}
+              style={{ backgroundImage: `url(${closeBookFrame})` }}
+              aria-label="Choose the cover saved with this book"
+            >
+              Choose Cover
+              {formatResolving && <span>Refreshing…</span>}
+            </button>
+          )}
 
           <div className="add-book-nav-slot">
             {!isFirstPage && (
@@ -1486,6 +1761,47 @@ export default function AddBookModal({
           </button>
         </div>
       </div>
+
+      {coverPickerOpen && (
+        <div className="add-cover-picker-overlay" role="dialog" aria-modal="true" aria-label="Choose the cover saved with this book">
+          <section className="add-cover-picker">
+            <header>
+              <span>
+                <small>Before this story joins the shelf</small>
+                <h3>Choose the edition that feels like yours</h3>
+              </span>
+              <button type="button" aria-label="Close cover choices" onClick={() => setCoverPickerOpen(false)}>×</button>
+            </header>
+            {coverSearchMessage && <p>{coverSearchMessage}</p>}
+            <div className="add-cover-picker-grid">
+              {addCoverCandidates.map((candidate) => {
+                const selected = candidate.coverImageUrl === book.coverUrl;
+                return (
+                  <button
+                    type="button"
+                    className={selected ? "selected" : ""}
+                    aria-pressed={selected}
+                    key={`${candidate.provider}-${candidate.providerId}-${candidate.coverImageUrl}`}
+                    onClick={() => {
+                      if (candidate.coverImageUrl) {
+                        setBook((current) => ({ ...current, coverUrl: candidate.coverImageUrl || "" }));
+                      }
+                    }}
+                  >
+                    <img src={candidate.coverImageUrl || ""} alt={`Cover of ${candidate.title}`} />
+                    <strong>{candidate.editionFormat || candidate.format}</strong>
+                    <small>{[candidate.language, candidate.publisher, candidate.publicationDate?.slice(0, 4)].filter(Boolean).join(" • ")}</small>
+                    {selected && <em>Selected</em>}
+                  </button>
+                );
+              })}
+            </div>
+            <button type="button" className="add-cover-picker-done" onClick={() => setCoverPickerOpen(false)}>
+              Use this cover
+            </button>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

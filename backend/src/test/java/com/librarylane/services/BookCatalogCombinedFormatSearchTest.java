@@ -13,6 +13,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -322,6 +324,270 @@ class BookCatalogCombinedFormatSearchTest {
     }
 
     @Test
+    void exactWorkAuthorBeatsAnUnrelatedInferredSeries() {
+        CatalogBookResult exactPhysical = resultWithMetadata(
+                "Open Library",
+                "fourth-wing-print",
+                "Fourth Wing",
+                "Rebecca Yarros",
+                null,
+                "PHYSICAL");
+        CatalogBookResult unrelatedSeries = resultWithMetadata(
+                "Google Books",
+                "dragon-academy",
+                "The Fourth Wing The Dragon Academy",
+                "Kelly Emberfall",
+                "Fourth Wing",
+                "EBOOK");
+        CatalogBookResult exactEbook = resultWithMetadata(
+                "Google Books",
+                "fourth-wing-ebook",
+                "Fourth Wing",
+                "Rebecca Yarros",
+                null,
+                "EBOOK");
+        CatalogBookResult wordSearch = resultWithMetadata(
+                "Google Books",
+                "word-search",
+                "Fourth Wing: The Official Word Search Book",
+                "Entangled",
+                null,
+                "PHYSICAL");
+        CatalogBookResult canvasBag = resultWithMetadata(
+                "Google Books",
+                "canvas-bag",
+                "Fourth Wing Shadows of Navarre Canvas Bag",
+                "Paperblanks",
+                null,
+                "PHYSICAL");
+        CatalogBookResult exactAudiobook = resultWithMetadata(
+                "Apple Audiobooks",
+                "fourth-wing-audio",
+                "Fourth Wing (Empyrean)",
+                "Rebecca Yarros",
+                "The Empyrean",
+                "AUDIOBOOK");
+
+        when(openLibrary.search("Fourth Wing", null, "TITLE"))
+                .thenReturn(List.of(exactPhysical));
+        when(googleBooks.search("Fourth Wing", null, "TITLE"))
+                .thenReturn(List.of(
+                        unrelatedSeries,
+                        exactEbook,
+                        wordSearch,
+                        canvasBag));
+        when(googleBooks.search("Fourth Wing", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(appleAudiobooks.search(
+                "Fourth Wing",
+                "AUDIOBOOK",
+                "TITLE"))
+                .thenReturn(List.of(exactAudiobook));
+
+        List<CatalogBookResult> results = service.search(
+                "Fourth Wing",
+                null,
+                "TITLE");
+
+        assertEquals(
+                List.of("PHYSICAL", "EBOOK", "AUDIOBOOK"),
+                results.stream()
+                        .limit(3)
+                        .map(CatalogBookResult::format)
+                        .toList());
+        assertEquals(
+                List.of(
+                        "Rebecca Yarros",
+                        "Rebecca Yarros",
+                        "Rebecca Yarros"),
+                results.stream()
+                        .limit(3)
+                        .map(result -> result.authors().getFirst())
+                        .toList());
+        assertFalse(results.stream().anyMatch(result -> {
+            String title = result.title().toLowerCase();
+            return title.contains("word search")
+                    || title.contains("canvas bag");
+        }));
+    }
+
+    @Test
+    void leadFormatsPreferEnglishAndStrongTitles() {
+        CatalogBookResult turkishPhysical = resultWithLanguageAndDescription(
+                "Open Library",
+                "onyx-tr",
+                "Onyx Storm",
+                "Rebecca Yarros",
+                null,
+                "tr",
+                null,
+                "PHYSICAL");
+        CatalogBookResult englishPhysical = resultWithLanguageAndDescription(
+                "Open Library",
+                "onyx-en",
+                "Onyx Storm",
+                "Rebecca Yarros",
+                null,
+                "en",
+                null,
+                "PHYSICAL");
+        CatalogBookResult englishEbook = resultWithLanguageAndDescription(
+                "Google Books",
+                "onyx-ebook-en",
+                "Onyx Storm",
+                "Rebecca Yarros",
+                null,
+                "en",
+                null,
+                "EBOOK");
+        CatalogBookResult germanAudiobook =
+                resultWithLanguageAndDescription(
+                        "Apple Audiobooks",
+                        "onyx-audio-de",
+                        "Onyx Storm - Flammengeküsst-Reihe",
+                        "Rebecca Yarros",
+                        "Flammengeküsst-Reihe",
+                        "de",
+                        null,
+                        "AUDIOBOOK");
+        CatalogBookResult englishAudiobook =
+                resultWithLanguageAndDescription(
+                        "Apple Audiobooks",
+                        "onyx-audio-en",
+                        "Onyx Storm (Empyrean, Book 3)",
+                        "Rebecca Yarros",
+                        "The Empyrean",
+                        "en",
+                        null,
+                        "AUDIOBOOK");
+
+        when(openLibrary.search("Onyx Storm", null, "TITLE"))
+                .thenReturn(List.of(
+                        turkishPhysical,
+                        englishPhysical));
+        when(googleBooks.search("Onyx Storm", null, "TITLE"))
+                .thenReturn(List.of(englishEbook));
+        when(googleBooks.search("Onyx Storm", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(appleAudiobooks.search(
+                "Onyx Storm",
+                "AUDIOBOOK",
+                "TITLE"))
+                .thenReturn(List.of(
+                        germanAudiobook,
+                        englishAudiobook));
+
+        List<CatalogBookResult> results = service.search(
+                "Onyx Storm",
+                null,
+                "TITLE");
+
+        assertEquals(
+                List.of(
+                        "onyx-en",
+                        "onyx-ebook-en",
+                        "onyx-audio-en"),
+                results.stream()
+                        .limit(3)
+                        .map(CatalogBookResult::providerId)
+                        .toList());
+    }
+
+    @Test
+    void explicitAudiobookSearchRanksEnglishBeforeRicherForeignEdition() {
+        CatalogBookResult foreign = resultWithLanguageAndDescription(
+                "Apple Audiobooks",
+                "great-foreign-audio",
+                "Great and Precious Things",
+                "Rebecca Yarros",
+                "Legacy",
+                "de",
+                "A richly described foreign-language production.",
+                "AUDIOBOOK");
+        CatalogBookResult english = resultWithLanguageAndDescription(
+                "Apple Audiobooks",
+                "great-english-audio",
+                "Great and Precious Things",
+                "Rebecca Yarros",
+                null,
+                "en",
+                null,
+                "AUDIOBOOK");
+
+        when(appleAudiobooks.search(
+                "Great and Precious Things", "AUDIOBOOK", "TITLE"))
+                .thenReturn(List.of(foreign, english));
+
+        List<CatalogBookResult> results = service.search(
+                "Great and Precious Things", "AUDIOBOOK", "TITLE");
+
+        assertEquals("great-english-audio", results.getFirst().providerId());
+    }
+
+    @Test
+    void televisionMarketingCopyIsNotInferredAsSeriesMetadata() {
+        CatalogBookResult result = resultWithLanguageAndDescription(
+                "Google Books",
+                "iron-flame",
+                "Iron Flame",
+                "Rebecca Yarros",
+                null,
+                "en",
+                "A #1 New York Times bestseller. A television series is in development.",
+                "EBOOK");
+
+        when(openLibrary.search("Iron Flame", null, "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search("Iron Flame", null, "TITLE"))
+                .thenReturn(List.of(result));
+        when(googleBooks.search("Iron Flame", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(appleAudiobooks.search(
+                "Iron Flame",
+                "AUDIOBOOK",
+                "TITLE"))
+                .thenReturn(List.of());
+
+        List<CatalogBookResult> results = service.search(
+                "Iron Flame",
+                null,
+                "TITLE");
+
+        assertFalse(results.getFirst().seriesName() != null);
+        assertFalse(results.getFirst().seriesNumber() != null);
+    }
+    @Test
+    void readingOrderUsesNumberAssociatedWithCurrentTitle() {
+        CatalogBookResult ironFlame = resultWithLanguageAndDescription(
+                "Google Books",
+                "iron-reading-order",
+                "Iron Flame",
+                "Rebecca Yarros",
+                "The Empyrean",
+                "en",
+                "Reading Order: Book #1 Fourth Wing, Book #2 Iron Flame, Book #3 Onyx Storm.",
+                "EBOOK");
+
+        when(openLibrary.search("Iron Flame", null, "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search("Iron Flame", null, "TITLE"))
+                .thenReturn(List.of(ironFlame));
+        when(googleBooks.search("Iron Flame", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(appleAudiobooks.search(
+                "Iron Flame",
+                "AUDIOBOOK",
+                "TITLE"))
+                .thenReturn(List.of());
+
+        List<CatalogBookResult> results = service.search(
+                "Iron Flame",
+                null,
+                "TITLE");
+
+        assertEquals(2.0, results.getFirst().seriesNumber());
+    }
+    @Test
     void appleFailureDoesNotRemoveExistingBookResults() {
         when(openLibrary.search("Queen", null, "TITLE"))
                 .thenReturn(List.of(result(
@@ -350,6 +616,88 @@ class BookCatalogCombinedFormatSearchTest {
         assertEquals(Set.of("PHYSICAL", "EBOOK"), formats);
     }
 
+    @Test
+    void explicitPhysicalSearchPrefersEnglishButKeepsForeignEditions() {
+        CatalogBookResult turkish = resultWithLanguageAndDescription(
+                "Open Library",
+                "onyx-tr-explicit",
+                "Onyx Storm",
+                "Rebecca Yarros",
+                "The Empyrean",
+                "tr",
+                null,
+                "PHYSICAL");
+        CatalogBookResult english = resultWithLanguageAndDescription(
+                "Google Books",
+                "onyx-en-explicit",
+                "Onyx Storm",
+                "Rebecca Yarros",
+                null,
+                "en",
+                null,
+                "PHYSICAL");
+        CatalogBookResult deluxe = resultWithLanguageAndDescription(
+                "Google Books",
+                "onyx-deluxe",
+                "Onyx Storm (Deluxe Limited Edition)",
+                "Rebecca Yarros",
+                "The Empyrean",
+                "en",
+                null,
+                "PHYSICAL");
+
+        CatalogBookResult wrongAuthor = resultWithLanguageAndDescription(
+                "Open Library",
+                "onyx-wrong-author",
+                "Onyx Storm",
+                "Prabhu Tl",
+                null,
+                "en",
+                null,
+                "PHYSICAL");
+
+        when(openLibrary.search("Onyx Storm", "PHYSICAL", "TITLE"))
+                .thenReturn(List.of(wrongAuthor, turkish));
+        when(googleBooks.search("Onyx Storm", "PHYSICAL", "TITLE"))
+                .thenReturn(List.of(english, deluxe));
+
+        List<CatalogBookResult> results =
+                service.search("Onyx Storm", "PHYSICAL", "TITLE");
+
+        assertEquals("onyx-en-explicit", results.getFirst().providerId());
+        List<String> rankedIds = results.stream()
+                .map(CatalogBookResult::providerId)
+                .toList();
+        assertTrue(rankedIds.indexOf("onyx-deluxe")
+                < rankedIds.indexOf("onyx-wrong-author"));
+        assertTrue(results.stream().anyMatch(result ->
+                "onyx-tr-explicit".equals(result.providerId())));
+    }
+    @Test
+    void explicitPhysicalSearchRejectsMislabeledEbookResults() {
+        CatalogBookResult physical = result(
+                "Open Library",
+                "physical-queen",
+                "Queen",
+                "PHYSICAL");
+        CatalogBookResult ebook = result(
+                "Google Books",
+                "ebook-queen",
+                "Queen",
+                "EBOOK");
+
+        when(openLibrary.search("Queen", "PHYSICAL", "TITLE"))
+                .thenReturn(List.of(physical));
+        when(googleBooks.search("Queen", "PHYSICAL", "TITLE"))
+                .thenReturn(List.of(ebook));
+
+        List<CatalogBookResult> results =
+                service.search("Queen", "PHYSICAL", "TITLE");
+
+        assertEquals(1, results.size());
+        assertEquals("PHYSICAL", results.getFirst().format());
+        assertEquals("physical-queen", results.getFirst().providerId());
+    }
     @Test
     void explicitPhysicalSearchDoesNotInvokeApple() {
         when(openLibrary.search("Queen", "PHYSICAL", "TITLE"))
@@ -395,6 +743,37 @@ class BookCatalogCombinedFormatSearchTest {
                 format);
     }
 
+    private static CatalogBookResult resultWithLanguageAndDescription(
+            String provider,
+            String providerId,
+            String title,
+            String author,
+            String seriesName,
+            String language,
+            String description,
+            String format) {
+        return new CatalogBookResult(
+                provider,
+                providerId,
+                title,
+                null,
+                List.of(author),
+                List.of(),
+                description,
+                null,
+                null,
+                "PHYSICAL".equals(format) ? 300 : null,
+                "AUDIOBOOK".equals(format) ? 36_000 : null,
+                List.of(),
+                null,
+                language,
+                null,
+                null,
+                seriesName,
+                null,
+                "AUDIOBOOK".equals(format) ? "Audiobook" : null,
+                format);
+    }
     private static CatalogBookResult resultWithMetadata(
             String provider,
             String providerId,

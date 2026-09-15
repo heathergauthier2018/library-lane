@@ -11,6 +11,8 @@ import java.util.List;
 @CrossOrigin(origins = "*")
 public class BookController {
 
+    public record ShelfPlacement(Long bookId, Integer position) {}
+
     private final BookService bookService;
 
     public BookController(BookService bookService) {
@@ -37,6 +39,18 @@ public class BookController {
             @PathVariable Long id,
             @RequestBody Book book) {
         return bookService.updateBook(id, book);
+    }
+
+    @PutMapping("/arrangement")
+    public void updateShelfArrangement(
+            @RequestBody List<ShelfPlacement> placements) {
+        bookService.updateShelfArrangement(placements);
+    }
+
+    @PutMapping("/cover-arrangement")
+    public void updateCoverShelfArrangement(
+            @RequestBody List<ShelfPlacement> placements) {
+        bookService.updateCoverShelfArrangement(placements);
     }
 
     @DeleteMapping("/{id}")

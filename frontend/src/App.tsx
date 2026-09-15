@@ -3,6 +3,7 @@ import "./App.css";
 
 import FantasyDashboard from "./dashboard/FantasyDashboard";
 import BooksPage from "./pages/BooksPage";
+import CollectionsPage from "./pages/CollectionsPage";
 
 export type AppPage =
   | "My Library"
@@ -19,6 +20,15 @@ function App() {
   function handleGlobalAddBook() {
     setOpenAddBookOnBooksPage(true);
     setCurrentPage("Books");
+  }
+
+  if (currentPage === "Collections") {
+    return (
+      <CollectionsPage
+        currentPage={currentPage}
+        setCurrentPage={setCurrentPage}
+      />
+    );
   }
 
   if (currentPage === "Books") {

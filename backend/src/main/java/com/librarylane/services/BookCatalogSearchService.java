@@ -26,6 +26,13 @@ public class BookCatalogSearchService {
     private static final Pattern NUMERIC_ORDINAL_SERIES_NUMBER = Pattern.compile(
             "(?i)\\b(\\d+)(?:st|nd|rd|th)\\s+"
                     + "(?:book|novel|audiobook|volume|installment|entry)\\b");
+
+    private static final Pattern NUMERIC_ORDINAL_IN_SERIES =
+            Pattern.compile(
+                    "(?i)\\b(\\d+)(?:st|nd|rd|th)\\s+"
+                            + "(?:book|novel|audiobook|volume|installment|entry)\\s+"
+                            + "(?:of|in)\\s+(?:the\\s+)?"
+                            + "[^.!?]{1,80}\\b(?:series|trilogy)\\b");
     private static final Pattern ORDINAL_IN_SERIES = Pattern.compile(
             "(?i)\\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)"
                     + "(?:\\s+and\\s+final)?\\s+"
@@ -40,7 +47,8 @@ public class BookCatalogSearchService {
             "(?i)\\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)"
                     + "(?:\\s+and\\s+final)?\\s+"
                     + "(?:(?:book|novel|audiobook|installment|entry)\\s+)?"
-                    + "(?:in|of)\\s+(?:the\\s+)?"
+                    + "(?:in|of)\\s+"
+                    + "(?:(the)\\s+)?"
                     + "(?:#\\s*1\\s+)?"
                     + "([\\p{L}\\p{N}][\\p{L}\\p{N}'’&: -]{1,70}?)\\s+"
                     + "(?:series|trilogy)\\b");
@@ -219,9 +227,17 @@ public class BookCatalogSearchService {
             }
         }
 
+        Set<String> dominantTitleAuthors = dominantTitleAuthors(
+                combined,
+                cleanedQuery,
+                searchBy,
+                format);
+
         Map<String, CatalogBookResult> unique = new LinkedHashMap<>();
         combined.stream()
                 .map(BookCatalogSearchService::cleanMetadata)
+                .filter(result -> !hasText(format)
+                        || normalize(format).equals(normalize(result.format())))
                 .filter(result -> matchesRequestedField(result, cleanedQuery, searchBy))
                 .filter(result -> shouldShowSingleWorkResult(
                         result,
@@ -229,8 +245,11 @@ public class BookCatalogSearchService {
                         searchBy))
                 .sorted(Comparator
                         .comparingInt((CatalogBookResult result) ->
-                                relevance(result, cleanedQuery, searchBy))
+                                relevance(result, cleanedQuery, searchBy)
+                                        + authorConsensusPreference(
+                                                result, dominantTitleAuthors))
                         .reversed()
+                        .thenComparingInt(BookCatalogSearchService::languageSortRank)
                         .thenComparing(CatalogBookResult::title, String.CASE_INSENSITIVE_ORDER))
                 .forEach(result -> unique.merge(
                         searchIdentity(result),
@@ -288,9 +307,16 @@ public class BookCatalogSearchService {
                         cleanedQuery,
                         searchBy))
                 .sorted(Comparator
-                        .comparingInt((CatalogBookResult result) ->
-                                relevance(result, cleanedQuery, searchBy))
-                        .reversed()
+                        // An exact foreign-language production can otherwise
+                        // outrank the preferred-language narration merely by
+                        // carrying richer storefront metadata. Language is a
+                        // reader-facing edition choice, so settle it before
+                        // comparing completeness within audiobook results.
+                        .comparingInt(BookCatalogSearchService::languageSortRank)
+                        .thenComparing(Comparator.comparingInt(
+                                (CatalogBookResult result) -> relevance(
+                                        result, cleanedQuery, searchBy))
+                                .reversed())
                         .thenComparing(CatalogBookResult::title, String.CASE_INSENSITIVE_ORDER))
                 .forEach(result -> unique.merge(
                         identity(result),
@@ -319,27 +345,62 @@ public class BookCatalogSearchService {
         Set<CatalogBookResult> promoted =
                 java.util.Collections.newSetFromMap(
                         new java.util.IdentityHashMap<>());
-        Set<String> canonicalSeriesAuthors = ranked.stream()
+        Set<String> detectedSeriesAuthors = ranked.stream()
                 .filter(result -> seriesMatchesQuery(result, cleanedQuery))
                 .flatMap(result -> safe(result.authors()).stream())
                 .map(BookCatalogSearchService::canonicalPerson)
                 .filter(value -> !value.isBlank())
                 .collect(java.util.stream.Collectors.toCollection(
                         java.util.LinkedHashSet::new));
-        Set<String> canonicalWorkAuthors = ranked.stream()
+
+        CatalogBookResult canonicalWork = ranked.stream()
                 .filter(result -> !isAudiobookFormat(result.format()))
                 .filter(result -> !looksLikeAncillaryRecord(result))
-                .filter(result -> queryFamilyTitleMatch(
+                .filter(result -> strongWorkTitleMatch(
                         result,
-                        cleanedQuery)
-                        || strongWorkTitleMatch(result, cleanedQuery))
+                        cleanedQuery))
+                .sorted(leadPreference(cleanedQuery))
                 .findFirst()
-                .stream()
-                .flatMap(result -> safe(result.authors()).stream())
-                .map(BookCatalogSearchService::canonicalPerson)
-                .filter(value -> !value.isBlank())
-                .collect(java.util.stream.Collectors.toCollection(
-                        java.util.LinkedHashSet::new));
+                .orElseGet(() -> ranked.stream()
+                        .filter(result ->
+                                !isAudiobookFormat(result.format()))
+                        .filter(result ->
+                                !looksLikeAncillaryRecord(result))
+                        .filter(result -> queryFamilyTitleMatch(
+                                result,
+                                cleanedQuery))
+                        .sorted(leadPreference(cleanedQuery))
+                        .findFirst()
+                        .orElse(null));
+
+        Set<String> canonicalWorkAuthors = canonicalWork == null
+                ? Set.of()
+                : safe(canonicalWork.authors()).stream()
+                  .map(BookCatalogSearchService::canonicalPerson)
+                  .filter(value -> !value.isBlank())
+                  .collect(java.util.stream.Collectors.toCollection(
+                          java.util.LinkedHashSet::new));
+
+        long exactWorkFormatCount = ranked.stream()
+                .filter(result -> belongsToAuthorFamily(
+                        result,
+                        canonicalWorkAuthors))
+                .filter(result -> strongWorkTitleMatch(
+                        result,
+                        cleanedQuery))
+                .map(result -> safeTitle(result.format()).toUpperCase(
+                        Locale.ROOT))
+                .filter(value -> Set.of(
+                        "PHYSICAL",
+                        "EBOOK",
+                        "AUDIOBOOK").contains(value))
+                .distinct()
+                .count();
+
+        Set<String> canonicalSeriesAuthors =
+                exactWorkFormatCount >= 2
+                        ? Set.of()
+                        : detectedSeriesAuthors;
 
         for (String format : List.of("PHYSICAL", "EBOOK", "AUDIOBOOK")) {
             CatalogBookResult lead = canonicalSeriesAuthors.isEmpty()
@@ -353,6 +414,7 @@ public class BookCatalogSearchService {
                       .filter(result -> queryFamilyTitleMatch(
                               result,
                               cleanedQuery))
+                      .sorted(leadPreference(cleanedQuery))
                       .findFirst()
                       .orElse(null);
 
@@ -369,6 +431,7 @@ public class BookCatalogSearchService {
                                 || strongWorkTitleMatch(
                                 result,
                                 cleanedQuery))
+                        .sorted(leadPreference(cleanedQuery))
                         .findFirst()
                         .orElse(null);
             }
@@ -379,6 +442,7 @@ public class BookCatalogSearchService {
                         .filter(result -> queryFamilyTitleMatch(
                                 result,
                                 cleanedQuery))
+                        .sorted(leadPreference(cleanedQuery))
                         .findFirst()
                         .orElse(null);
             }
@@ -408,7 +472,9 @@ public class BookCatalogSearchService {
                     .toList();
             for (CatalogBookResult result : seriesFamily) {
                 if (!promoted.contains(result)
-                        && belongsToAuthorFamily(result, canonicalSeriesAuthors)) {
+                        && belongsToAuthorFamily(
+                                result,
+                                canonicalSeriesAuthors)) {
                     prioritized.add(result);
                     promoted.add(result);
                 }
@@ -421,6 +487,40 @@ public class BookCatalogSearchService {
         return prioritized;
     }
 
+    private static Comparator<CatalogBookResult> leadPreference(
+            String cleanedQuery) {
+        return Comparator
+                .comparingInt(BookCatalogSearchService::languageSortRank)
+                .thenComparing(Comparator.comparingInt(
+                        (CatalogBookResult result) ->
+                                leadPreferenceScore(result, cleanedQuery))
+                        .reversed());
+    }
+
+    private static int leadPreferenceScore(
+            CatalogBookResult result,
+            String cleanedQuery) {
+        int score = strongWorkTitleMatch(result, cleanedQuery) ? 100 : 0;
+
+        if (isEnglish(result.language())) {
+            score += 40;
+        } else if (!hasText(result.language())) {
+            score += 20;
+        }
+
+        score += completeness(result);
+        if (hasText(result.coverImageUrl())) {
+            score += normalize(result.coverImageUrl()).contains("books google")
+                    ? 45 : 15;
+        }
+
+        return score;
+    }
+    private static int languageSortRank(CatalogBookResult result) {
+        if (isEnglish(result.language())) return 0;
+        if (!hasText(result.language())) return 1;
+        return 2;
+    }
     private static boolean hasStrongFormatMatch(
             Iterable<CatalogBookResult> results,
             String cleanedQuery,
@@ -434,6 +534,66 @@ public class BookCatalogSearchService {
         return false;
     }
 
+    private static Set<String> dominantTitleAuthors(
+            Iterable<CatalogBookResult> results,
+            String cleanedQuery,
+            String rawSearchBy,
+            String requestedFormat) {
+        if (!"TITLE".equals(normalizeSearchBy(rawSearchBy))) {
+            return Set.of();
+        }
+
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (CatalogBookResult rawResult : results) {
+            CatalogBookResult result = cleanMetadata(rawResult);
+            if (hasText(requestedFormat)
+                    && !normalize(requestedFormat).equals(
+                    normalize(result.format()))) {
+                continue;
+            }
+            if (!matchesRequestedField(
+                    result, cleanedQuery, rawSearchBy)
+                    || !shouldShowSingleWorkResult(
+                    result, cleanedQuery, rawSearchBy)
+                    || !strongWorkTitleMatch(result, cleanedQuery)) {
+                continue;
+            }
+
+            safe(result.authors()).stream()
+                    .map(BookCatalogSearchService::canonicalPerson)
+                    .filter(value -> !value.isBlank())
+                    .distinct()
+                    .forEach(author -> counts.merge(
+                            author, 1, Integer::sum));
+        }
+
+        int strongestCount = counts.values().stream()
+                .mapToInt(Integer::intValue)
+                .max()
+                .orElse(0);
+        if (strongestCount < 2) return Set.of();
+
+        List<String> strongestAuthors = counts.entrySet().stream()
+                .filter(entry -> entry.getValue() == strongestCount)
+                .map(Map.Entry::getKey)
+                .toList();
+
+        return strongestAuthors.size() == 1
+                ? Set.of(strongestAuthors.getFirst())
+                : Set.of();
+    }
+
+    private static int authorConsensusPreference(
+            CatalogBookResult result,
+            Set<String> dominantAuthors) {
+        if (dominantAuthors.isEmpty()) return 0;
+        // A raw exact title can score up to 500 points above the same work
+        // carrying an edition suffix, with up to 70 additional metadata
+        // points. Consensus must outweigh that difference without allowing a
+        // weak title match to overtake a genuinely exact work.
+        return belongsToAuthorFamily(result, dominantAuthors)
+                ? 600 : 0;
+    }
     private static boolean seriesMatchesQuery(
             CatalogBookResult result,
             String cleanedQuery) {
@@ -567,17 +727,47 @@ public class BookCatalogSearchService {
             System.err.println("Open Library work resolution failed: " + error.getMessage());
         }
 
+        if (!"AUDIOBOOK".equalsIgnoreCase(
+                safeTitle(selectedResult.format()))) {
+            String selectedIsbn = hasText(selectedResult.isbn13())
+                    ? selectedResult.isbn13()
+                    : selectedResult.isbn10();
+            if (hasText(selectedIsbn)) {
+                Integer exactEditionPages =
+                        openLibrary.findPageCountByIsbn(selectedIsbn);
+                if (shouldUseExactEditionPages(
+                        resolved.pageCount(), exactEditionPages)) {
+                    resolved = withPageCount(
+                            resolved,
+                            exactEditionPages);
+                }
+            }
+        }
         try {
             CatalogBookResult current = resolved;
-            CatalogBookResult supplement = googleBooks.search(
-                            current.title(), current.format(), "TITLE")
+            List<CatalogBookResult> googleCandidates = googleBooks.search(
+                    current.title(), current.format(), "TITLE");
+            List<CatalogBookResult> matchingCandidates = googleCandidates
                     .stream()
                     .filter(candidate -> !looksLikeAncillaryRecord(candidate))
                     .filter(candidate -> exactSameWork(current, candidate))
+                    .toList();
+            CatalogBookResult supplement = matchingCandidates.stream()
                     .max(Comparator.comparingInt(BookCatalogSearchService::completeness))
                     .orElse(null);
             if (supplement != null) {
                 resolved = mergeSelectedWithSupplement(resolved, supplement);
+            }
+
+            CatalogBookResult coverCandidate = matchingCandidates.stream()
+                    .filter(candidate -> hasText(candidate.coverImageUrl()))
+                    .max(Comparator.comparingInt(candidate ->
+                            coverPreference(current, candidate)))
+                    .orElse(null);
+            if (shouldReplaceSelectedCover(current, coverCandidate)) {
+                resolved = withCoverImage(
+                        resolved,
+                        coverCandidate.coverImageUrl());
             }
         } catch (RuntimeException error) {
             System.err.println("Google Books work enrichment failed: " + error.getMessage());
@@ -595,6 +785,16 @@ public class BookCatalogSearchService {
         return cleanMetadata(resolved);
     }
 
+    private static boolean shouldUseExactEditionPages(
+            Integer selectedPages,
+            Integer exactEditionPages) {
+        if (exactEditionPages == null || exactEditionPages <= 0) return false;
+        if (selectedPages == null || selectedPages <= 0) return true;
+
+        int difference = Math.abs(selectedPages - exactEditionPages);
+        return difference > Math.max(40, Math.round(exactEditionPages * 0.2f));
+    }
+
     private CatalogBookResult enrichAudiobookWorkFacts(
             CatalogBookResult audiobook) {
         try {
@@ -610,9 +810,9 @@ public class BookCatalogSearchService {
             String publicationDate = trustworthyEarlierWorkDate(
                     audiobook.publicationDate(),
                     enriched.publicationDate());
-            String seriesName = prefer(
-                    displaySeriesName(audiobook.seriesName()),
-                    displaySeriesName(enriched.seriesName()));
+            String seriesName = discoverAudiobookSeriesName(
+                    audiobook,
+                    List.of(enriched));
             Double seriesNumber = audiobook.seriesNumber() != null
                     ? audiobook.seriesNumber() : enriched.seriesNumber();
 
@@ -692,7 +892,7 @@ public class BookCatalogSearchService {
                 enrichedWorks.values());
         String discoveredSeriesName = discoverAudiobookSeriesName(
                 selected,
-                enrichedWorks.values());
+                matchedSupplements);
         if (discoveredSeriesNumber == null
                 && hasText(discoveredSeriesName)) {
             discoveredSeriesNumber = inferSeriesPositionFromCatalog(
@@ -860,32 +1060,47 @@ public class BookCatalogSearchService {
     private static String discoverAudiobookSeriesName(
             CatalogBookResult selected,
             Iterable<CatalogBookResult> supplements) {
-        String selectedEvidence = preferredAudiobookSeries(
-                selected,
-                inferAudiobookSeriesName(selected));
-        if (hasText(selectedEvidence)) return selectedEvidence;
-
         Map<String, SeriesCandidate> candidates = new LinkedHashMap<>();
-        for (CatalogBookResult supplement : supplements) {
-            String name = preferredAudiobookSeries(
-                    selected,
-                    prefer(
-                            supplement.seriesName(),
-                            inferAudiobookSeriesName(supplement)));
-            if (!hasText(name)) continue;
 
-            String key = canonicalSeries(name);
-            if (key.isBlank()) continue;
-            String provider = publicationProviderFamily(supplement.provider());
-            candidates.compute(key, (ignored, existing) -> {
-                if (existing == null) {
-                    SeriesCandidate created = new SeriesCandidate(name);
-                    created.providers().add(provider);
-                    return created;
-                }
-                existing.providers().add(provider);
-                return existing;
-            });
+        String selectedName = cleanAudiobookSeriesAttribution(
+                prefer(
+                        selected.seriesName(),
+                        seriesNameFromAudiobookTitle(selected.title())),
+                selected.authors());
+        addSeriesCandidate(
+                candidates,
+                selectedName,
+                publicationProviderFamily(selected.provider()));
+
+        String selectedInference = cleanAudiobookSeriesAttribution(
+                inferAudiobookSeriesName(selected),
+                selected.authors());
+        addSeriesCandidate(
+                candidates,
+                selectedInference,
+                publicationProviderFamily(selected.provider()));
+
+        for (CatalogBookResult supplement : supplements) {
+            String provider =
+                    publicationProviderFamily(supplement.provider());
+
+            String structuredName = cleanAudiobookSeriesAttribution(
+                    supplement.seriesName(),
+                    selected.authors());
+            addSeriesCandidate(
+                    candidates,
+                    structuredName,
+                    provider);
+
+            // Descriptive evidence may preserve the official article or full
+            // series wording that a storefront's abbreviated label omitted.
+            String inferredName = cleanAudiobookSeriesAttribution(
+                    inferAudiobookSeriesName(supplement),
+                    selected.authors());
+            addSeriesCandidate(
+                    candidates,
+                    inferredName,
+                    provider);
         }
 
         return candidates.values().stream()
@@ -896,20 +1111,113 @@ public class BookCatalogSearchService {
                 .map(SeriesCandidate::name)
                 .orElse(null);
     }
+    private static void addSeriesCandidate(
+            Map<String, SeriesCandidate> candidates,
+            String name,
+            String provider) {
+        if (!hasText(name)) return;
 
+        String key = canonicalSeries(name);
+        if (key.isBlank()) return;
+
+        candidates.compute(key, (ignored, existing) -> {
+            SeriesCandidate preferred = existing;
+            if (preferred == null
+                    || name.length() > preferred.name().length()) {
+                preferred = new SeriesCandidate(name);
+                if (existing != null) {
+                    preferred.providers().addAll(existing.providers());
+                }
+            }
+            preferred.providers().add(provider);
+            return preferred;
+        });
+    }
     private static Double inferSeriesNumber(
             CatalogBookResult selected,
             Iterable<CatalogBookResult> supplements) {
-        Double inferred = parseStrongSeriesNumber(metadataEvidence(selected));
+        Double inferred = parseStrongSeriesNumber(
+                structuredSeriesEvidence(selected));
+        if (inferred != null) return inferred;
+
+        inferred = seriesNumberAssociatedWithTitle(selected);
+        if (inferred != null) return inferred;
+
+        inferred = parseContextualDescriptionSeriesNumber(
+                selected.description());
         if (inferred != null) return inferred;
 
         for (CatalogBookResult supplement : supplements) {
-            inferred = parseStrongSeriesNumber(metadataEvidence(supplement));
+            inferred = parseStrongSeriesNumber(
+                    structuredSeriesEvidence(supplement));
+            if (inferred != null) return inferred;
+
+            inferred = seriesNumberAssociatedWithTitle(supplement);
+            if (inferred != null) return inferred;
+
+            inferred = parseContextualDescriptionSeriesNumber(
+                    supplement.description());
             if (inferred != null) return inferred;
         }
         return null;
     }
 
+    private static String structuredSeriesEvidence(
+            CatalogBookResult result) {
+        return String.join(
+                " ",
+                safeTitle(result.title()),
+                safeTitle(result.subtitle()),
+                safeTitle(result.seriesName()),
+                safeTitle(result.editionFormat()));
+    }
+
+    private static Double seriesNumberAssociatedWithTitle(
+            CatalogBookResult result) {
+        String title = canonicalSearchTitle(result.title());
+        String description = normalize(result.description());
+        if (title.isBlank() || description.isBlank()) return null;
+
+        Matcher numberBeforeTitle = Pattern.compile(
+                "(?i)\\bbook\\s*#?\\s*(\\d+(?:\\.\\d+)?)\\s+"
+                        + Pattern.quote(title)
+                        + "\\b")
+                .matcher(description);
+        if (numberBeforeTitle.find()) {
+            return parseNumber(numberBeforeTitle.group(1));
+        }
+
+        Matcher titleBeforeNumber = Pattern.compile(
+                "(?i)\\b"
+                        + Pattern.quote(title)
+                        + "\\s*(?:\\(|-|,|:)??\\s*"
+                        + "(?:book|volume|vol\\.?|part)\\s*#?\\s*"
+                        + "(\\d+(?:\\.\\d+)?)\\b")
+                .matcher(description);
+        if (titleBeforeNumber.find()) {
+            return parseNumber(titleBeforeNumber.group(1));
+        }
+
+        return null;
+    }
+
+    private static Double parseContextualDescriptionSeriesNumber(
+            String description) {
+        String evidence = safeTitle(description);
+
+        Matcher numericOrdinal =
+                NUMERIC_ORDINAL_IN_SERIES.matcher(evidence);
+        if (numericOrdinal.find()) {
+            return parseNumber(numericOrdinal.group(1));
+        }
+
+        Matcher ordinalInSeries = ORDINAL_IN_SERIES.matcher(evidence);
+        if (ordinalInSeries.find()) {
+            return numberWord(ordinalInSeries.group(1));
+        }
+
+        return null;
+    }
     private static Double discoverAudiobookSeriesNumber(
             CatalogBookResult selected,
             Iterable<CatalogBookResult> supplements) {
@@ -922,56 +1230,32 @@ public class BookCatalogSearchService {
                     .add(publicationProviderFamily(supplement.provider()));
         }
 
-        // Structured agreement from independent work catalogs is stronger
-        // than a storefront value that may have been inferred from marketing
-        // copy (for example “#1 bestseller”).
+        // Agreement from independent work catalogs is the strongest evidence.
         Double consensus = sources.entrySet().stream()
                 .filter(entry -> entry.getValue().size() >= 2)
-                .max(Comparator.comparingInt(entry -> entry.getValue().size()))
+                .max(Comparator.comparingInt(
+                        entry -> entry.getValue().size()))
                 .map(Map.Entry::getKey)
                 .orElse(null);
         if (consensus != null) return consensus;
 
-        // Prefer an explicit number found in independently retrieved work
-        // metadata. The selected storefront record is deliberately checked
-        // later because audiobook descriptions often contain unrelated
-        // promotional phrases such as “#1 bestseller.”
-        for (CatalogBookResult supplement : supplements) {
-            Double stronglyInferred =
-                    parseStrongSeriesNumber(metadataEvidence(supplement));
-            if (stronglyInferred != null) return stronglyInferred;
-        }
+        // Use only structured fields, a number paired with this exact title,
+        // or contextual wording tied directly to a named series. This avoids
+        // taking Book #1 from a general reading-order list while resolving a
+        // later volume.
+        Double safelyInferred = inferSeriesNumber(
+                selected,
+                supplements);
+        if (safelyInferred != null) return safelyInferred;
 
+        // A single structured work-catalog value is useful when there is no
+        // conflicting provider evidence.
         if (sources.size() == 1) {
             return sources.keySet().iterator().next();
         }
 
-        // An explicit sentence in the selected audiobook metadata remains
-        // useful when the storefront did not supply a structured number.
-        // Examples include “the third audiobook in the … series” and “the
-        // first book in the … series.” The strong parser deliberately rejects
-        // bestseller rankings and other promotional uses of “#1.”
-        Double supported =
-                parseStrongSeriesNumber(metadataEvidence(selected));
-        if (selected.seriesNumber() == null && supported != null) {
-            return supported;
-        }
-
-        // Keep an existing structured storefront value only when no stronger
-        // exact-work evidence contradicts it and the storefront's own explicit
-        // evidence supports that same number.
-        if (selected.seriesNumber() != null
-                && sources.isEmpty()) {
-            if (selected.seriesNumber().equals(supported)) {
-                return selected.seriesNumber();
-            }
-        } else if (selected.seriesNumber() != null
-                && sources.containsKey(selected.seriesNumber())) {
-            return selected.seriesNumber();
-        }
         return null;
     }
-
     /**
      * Derives a missing volume number from the original publication order of
      * matching-author titles in the verified series. At least two distinct
@@ -1116,47 +1400,68 @@ public class BookCatalogSearchService {
     private static String preferredAudiobookSeries(
             CatalogBookResult audiobook,
             String supplementalSeries) {
-        String selectedSeries = displaySeriesName(audiobook.seriesName());
+        String selectedSeries = cleanAudiobookSeriesAttribution(
+                audiobook.seriesName(),
+                audiobook.authors());
         if (hasText(selectedSeries)) return selectedSeries;
 
-        String titleSeries = displaySeriesName(
-                seriesNameFromAudiobookTitle(audiobook.title()));
+        String titleSeries = cleanAudiobookSeriesAttribution(
+                seriesNameFromAudiobookTitle(audiobook.title()),
+                audiobook.authors());
         if (hasText(titleSeries)) return titleSeries;
 
-        supplementalSeries = displaySeriesName(supplementalSeries);
-        if (!hasText(supplementalSeries)) return supplementalSeries;
+        return cleanAudiobookSeriesAttribution(
+                supplementalSeries,
+                audiobook.authors());
+    }
 
-        String cleaned = supplementalSeries.trim();
-        for (String author : safe(audiobook.authors())) {
+    private static String cleanAudiobookSeriesAttribution(
+            String value,
+            List<String> authors) {
+        String cleaned = displaySeriesName(value);
+        if (!hasText(cleaned)) return cleaned;
+
+        for (String author : safe(authors)) {
             String[] nameParts = safeTitle(author).split("\\s+");
             if (nameParts.length == 0) continue;
+
             String surname = nameParts[nameParts.length - 1];
             if (surname.length() < 2) continue;
 
-            String prefix = surname + " ";
-            if (cleaned.regionMatches(true, 0, prefix, 0, prefix.length())) {
-                String withoutSurname = cleaned.substring(prefix.length()).trim();
-                if (!withoutSurname.isBlank()) return withoutSurname;
-            }
+            // Accept both common possessive forms:
+            // Yarros' Empyrean and Tolkien's Middle-earth.
+            cleaned = cleaned.replaceFirst(
+                    "(?i)^" + Pattern.quote(surname)
+                            + "(?:['’]s|['’])?\\s+",
+                    "").trim();
         }
-        return cleaned;
-    }
 
-    private static String inferAudiobookSeriesName(CatalogBookResult result) {
+        return displaySeriesName(cleaned);
+    }
+    private static String inferAudiobookSeriesName(
+            CatalogBookResult result) {
         String evidence = metadataEvidence(result);
         Matcher explicit = EXPLICIT_NAMED_SERIES.matcher(evidence);
         if (explicit.find()) {
-            return cleanInferredSeriesName(explicit.group(1), result.authors());
+            String article = explicit.group(1);
+            String name = explicit.group(2);
+            // A capitalized "The" can be part of the official series name.
+            // Lowercase "the" is ordinary sentence grammar and is discarded.
+            String fullName = "The".equals(article)
+                    ? article + " " + name
+                    : name;
+            return cleanInferredSeriesName(
+                    fullName,
+                    result.authors());
         }
 
         return null;
     }
-
     private static String cleanInferredSeriesName(
             String candidate,
             List<String> authors) {
         String cleaned = safeTitle(candidate)
-                .replaceFirst("(?i)^the\\s+", "")
+
                 .replaceFirst("(?i)\\s+(?:book|novel|audiobook)$", "")
                 .trim();
 
@@ -1476,6 +1781,15 @@ public class BookCatalogSearchService {
             if (looksLikeMultiBookBundle(result.title())) score -= 3000;
         }
 
+        // Preferred-language editions should beat otherwise equivalent,
+        // metadata-richer foreign editions. The bonus remains far below the
+        // score separating an exact work-title match from a weak title match.
+        if (isEnglish(result.language())) {
+            score += 100;
+        } else if (!hasText(result.language())) {
+            score += 50;
+        }
+
         if (result.coverImageUrl() != null) score += 25;
         if (result.pageCount() != null && result.pageCount() > 0) score += 20;
         if (result.isbn13() != null || result.isbn10() != null) score += 15;
@@ -1487,7 +1801,9 @@ public class BookCatalogSearchService {
         return normalize(value)
                 .replaceFirst("^the\\s+", "")
                 .replaceFirst(
-                        "\\s+(?:special edition|anniversary edition|"
+                                                  "\\s+(?:deluxe limited edition|deluxe edition|"
+                                  + "limited edition|standard edition|special edition|"
+                                  + "anniversary edition|"
                                 + "collector s edition|unabridged|abridged|"
                                 + "dramatized adaptation|dramatized|audiobook)$",
                         "")
@@ -1496,7 +1812,12 @@ public class BookCatalogSearchService {
 
     private static boolean looksLikeAncillaryWork(String value) {
         String title = normalize(value);
-        return title.contains(" book analysis")
+        return title.contains(" word search")
+                || title.contains(" coloring book")
+                || title.contains(" activity book")
+                || title.contains(" canvas bag")
+                || title.contains(" tote bag")
+                || title.contains(" book analysis")
                 || title.contains(" book summary")
                 || title.contains(" teacher guide")
                 || title.contains(" teacher s guide")
@@ -1595,7 +1916,26 @@ public class BookCatalogSearchService {
     }
 
     private static String searchIdentity(CatalogBookResult result) {
-        return identity(result) + "|" + normalize(result.format());
+        String isbn13 = safeTitle(result.isbn13())
+                .replaceAll("[^0-9Xx]", "")
+                .toUpperCase(Locale.ROOT);
+        String isbn10 = safeTitle(result.isbn10())
+                .replaceAll("[^0-9Xx]", "")
+                .toUpperCase(Locale.ROOT);
+
+        String editionIdentity;
+        if (!isbn13.isBlank()) {
+            editionIdentity = "isbn13:" + isbn13;
+        } else if (!isbn10.isBlank()) {
+            editionIdentity = "isbn10:" + isbn10;
+        } else {
+            String language = normalize(result.language());
+            editionIdentity = language.isBlank()
+                    ? "language:unknown"
+                    : "language:" + language;
+        }
+
+        return identity(result) + "|" + editionIdentity;
     }
 
     private static CatalogBookResult merge(
@@ -1639,7 +1979,15 @@ public class BookCatalogSearchService {
             seriesNumber = inferredSeries.number();
         }
         if (seriesNumber == null && hasText(seriesName)) {
-            seriesNumber = parseStrongSeriesNumber(metadataEvidence(result));
+            seriesNumber = parseStrongSeriesNumber(
+                    structuredSeriesEvidence(result));
+        }
+        if (seriesNumber == null && hasText(seriesName)) {
+            seriesNumber = seriesNumberAssociatedWithTitle(result);
+        }
+        if (seriesNumber == null && hasText(seriesName)) {
+            seriesNumber = parseContextualDescriptionSeriesNumber(
+                    result.description());
         }
 
         return new CatalogBookResult(
@@ -1732,6 +2080,10 @@ public class BookCatalogSearchService {
                 || normalized.equals("chapter book")
                 || normalized.equals("bestselling")
                 || normalized.equals("best selling")
+                || normalized.equals("tv")
+                || normalized.equals("television")
+                || normalized.equals("film")
+                || normalized.equals("movie")
                 || normalized.contains("new york times")
                 || normalized.contains("bestselling chapter book")
                 || normalized.contains("best selling chapter book");
@@ -1916,6 +2268,107 @@ public class BookCatalogSearchService {
                     : Character.toUpperCase(word.charAt(0)) + word.substring(1));
         }
         return display.toString();
+    }
+
+    private static CatalogBookResult withPageCount(
+            CatalogBookResult result,
+            Integer pageCount) {
+        return new CatalogBookResult(
+                result.provider(),
+                result.providerId(),
+                result.title(),
+                result.subtitle(),
+                result.authors(),
+                result.genres(),
+                result.description(),
+                result.publisher(),
+                result.publicationDate(),
+                pageCount,
+                result.audiobookLengthSeconds(),
+                result.narrators(),
+                result.coverImageUrl(),
+                result.language(),
+                result.isbn10(),
+                result.isbn13(),
+                result.seriesName(),
+                result.seriesNumber(),
+                result.editionFormat(),
+                result.format()
+        );
+    }
+
+    private static CatalogBookResult withCoverImage(
+            CatalogBookResult result,
+            String coverImageUrl) {
+        return new CatalogBookResult(
+                result.provider(),
+                result.providerId(),
+                result.title(),
+                result.subtitle(),
+                result.authors(),
+                result.genres(),
+                result.description(),
+                result.publisher(),
+                result.publicationDate(),
+                result.pageCount(),
+                result.audiobookLengthSeconds(),
+                result.narrators(),
+                coverImageUrl,
+                result.language(),
+                result.isbn10(),
+                result.isbn13(),
+                result.seriesName(),
+                result.seriesNumber(),
+                result.editionFormat(),
+                result.format()
+        );
+    }
+
+    private static boolean shouldReplaceSelectedCover(
+            CatalogBookResult selected,
+            CatalogBookResult candidate) {
+        if (candidate == null || !hasText(candidate.coverImageUrl())) {
+            return false;
+        }
+        if (!hasText(selected.coverImageUrl())) return true;
+
+        // Artwork is a work-level display choice rather than edition metadata.
+        // The candidate has already passed exact-title, author, ancillary,
+        // language, and format ranking guards, so it may improve a weak cover
+        // without changing the reader's selected ISBN or edition identity.
+        return !safeTitle(selected.coverImageUrl()).equals(
+                safeTitle(candidate.coverImageUrl()));
+    }
+
+    private static int coverPreference(
+            CatalogBookResult selected,
+            CatalogBookResult candidate) {
+        int score = 0;
+        if (sameIsbn(selected.isbn13(), candidate.isbn13())
+                || sameIsbn(selected.isbn10(), candidate.isbn10())) score += 75;
+        if (normalize(selected.title()).equals(normalize(candidate.title()))) {
+            score += 250;
+        }
+        if (languagesMatch(selected.language(), candidate.language())) {
+            score += 150;
+        }
+        if (normalize(selected.format()).equals(normalize(candidate.format()))) {
+            score += 100;
+        }
+        if (isEnglish(candidate.language())) score += 25;
+        return score + completeness(candidate);
+    }
+
+    private static boolean sameIsbn(String first, String second) {
+        if (!hasText(first) || !hasText(second)) return false;
+        return first.replaceAll("[^0-9Xx]", "")
+                .equalsIgnoreCase(second.replaceAll("[^0-9Xx]", ""));
+    }
+
+    private static boolean languagesMatch(String first, String second) {
+        if (!hasText(first) || !hasText(second)) return false;
+        if (isEnglish(first) && isEnglish(second)) return true;
+        return normalize(first).equals(normalize(second));
     }
 
     private static CatalogBookResult mergeSelectedWithWork(

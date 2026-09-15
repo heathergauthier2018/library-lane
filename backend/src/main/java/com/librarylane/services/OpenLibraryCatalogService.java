@@ -18,6 +18,7 @@ public class OpenLibraryCatalogService {
 
     private static final String SEARCH_URL = "https://openlibrary.org/search.json";
     private static final String WORK_URL = "https://openlibrary.org/works/{workId}.json";
+    private static final String EDITION_URL = "https://openlibrary.org/isbn/{isbn}.json";
 
     private final RestClient restClient;
 
@@ -194,6 +195,37 @@ public class OpenLibraryCatalogService {
      * is safe for cross-format enrichment because it follows an edition into
      * its owning work instead of guessing from a shared title.
      */
+    /**
+     * Returns the page count attached to one exact Open Library edition.
+     * Work-level median pagination is deliberately not used here because it
+     * can describe a different hardcover, paperback, or digital edition.
+     */
+    public Integer findPageCountByIsbn(String rawIsbn) {
+        String isbn = rawIsbn == null
+                ? ""
+                : rawIsbn.replaceAll("[^0-9Xx]", "");
+        if (isbn.length() != 10 && isbn.length() != 13) return null;
+
+        try {
+            JsonNode edition = restClient.get()
+                    .uri(EDITION_URL, isbn)
+                    .retrieve()
+                    .body(JsonNode.class);
+            if (edition == null
+                    || edition.isMissingNode()
+                    || edition.isNull()) {
+                return null;
+            }
+
+            Integer pages = integer(edition.path("number_of_pages"));
+            return pages != null && pages > 0 ? pages : null;
+        } catch (RuntimeException error) {
+            System.err.println(
+                    "Open Library edition lookup failed for ISBN "
+                            + isbn + ": " + error.getMessage());
+            return null;
+        }
+    }
     public CatalogBookResult findWorkByIsbn(String rawIsbn) {
         String isbn = rawIsbn == null ? "" : rawIsbn.replaceAll("[^0-9Xx]", "");
         if (isbn.length() != 10 && isbn.length() != 13) return null;
