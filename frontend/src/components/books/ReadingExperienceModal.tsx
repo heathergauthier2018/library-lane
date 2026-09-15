@@ -48,16 +48,6 @@ type ReadingExperienceModalProps = {
   onSave: (experience: ReadingExperience) => Promise<void>;
 };
 
-const SPOTIFY_FULL_LOGO =
-  "https://storage.googleapis.com/pr-newsroom-wp/1/2023/05/Spotify_Full_Logo_RGB_Green.png";
-
-function spotifyAudiobookUrl(providerId: string) {
-  const [kind, id] = providerId.split(":", 2);
-  if (kind === "album") return `https://open.spotify.com/album/${id}`;
-  if (kind === "show") return `https://open.spotify.com/show/${id}`;
-  return `https://open.spotify.com/audiobooks`;
-}
-
 function catalogSearchField(field: string): CatalogSearchField {
   if (field === "author") return "AUTHOR";
   if (field === "seriesName") return "SERIES";
@@ -1540,22 +1530,6 @@ function ReadingExperienceModalContent({
           pageNumber={rightPageNumber}
           totalPages={totalDisplayedPages}
         />
-
-        {draftExperience.catalogProvider
-          ?.toLowerCase()
-          .includes("spotify audiobook") &&
-          draftExperience.catalogProviderId && (
-            <a
-              className="spotify-audiobook-attribution"
-              href={spotifyAudiobookUrl(draftExperience.catalogProviderId)}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="Open this audiobook on Spotify"
-            >
-              <img src={SPOTIFY_FULL_LOGO} alt="Spotify" />
-              <span>Open audiobook</span>
-            </a>
-          )}
 
         <div className="add-book-actions add-book-actions-left">
           <button

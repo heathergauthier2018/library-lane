@@ -3,6 +3,7 @@ package com.librarylane.services;
 import com.librarylane.entities.Author;
 import com.librarylane.entities.Book;
 import com.librarylane.entities.Genre;
+import com.librarylane.controllers.BookController.ShelfPlacement;
 import com.librarylane.enums.ReadingStatus;
 import com.librarylane.repositories.AuthorRepository;
 import com.librarylane.repositories.BookRepository;
@@ -14,7 +15,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -96,7 +99,11 @@ public class BookService {
         existingBook.setNarrator(updatedBook.getNarrator());
         existingBook.setCatalogProvider(updatedBook.getCatalogProvider());
         existingBook.setCatalogProviderId(updatedBook.getCatalogProviderId());
-        existingBook.setPersonalNotes(updatedBook.getPersonalNotes());
+        existingBook.setShelfPosition(updatedBook.getShelfPosition());
+        existingBook.setCoverShelfPosition(updatedBook.getCoverShelfPosition());
+        if (updatedBook.getPersonalNotes() != null) {
+            existingBook.setPersonalNotes(updatedBook.getPersonalNotes());
+        }
         existingBook.setPrimaryFormat(updatedBook.getPrimaryFormat());
         existingBook.setCurrentStatus(updatedBook.getCurrentStatus());
         existingBook.setFavorite(updatedBook.getFavorite());
@@ -108,6 +115,56 @@ public class BookService {
         existingBook.setAuthors(resolveAuthors(updatedBook.getAuthors()));
 
         return prepareBookForResponse(bookRepository.save(existingBook));
+    }
+
+    @Transactional
+    public void updateShelfArrangement(List<ShelfPlacement> placements) {
+        updateArrangementColumn(placements, "shelf_position", 207);
+    }
+
+    @Transactional
+    public void updateCoverShelfArrangement(List<ShelfPlacement> placements) {
+        updateArrangementColumn(placements, "cover_shelf_position", 100);
+    }
+
+    private void updateArrangementColumn(
+            List<ShelfPlacement> placements,
+            String column,
+            int maximumPosition) {
+        if (placements == null || placements.isEmpty()) return;
+        Map<Long, Integer> validated = new HashMap<>();
+        Set<Integer> occupiedSlots = new HashSet<>();
+        for (ShelfPlacement placement : placements) {
+            if (placement == null || placement.bookId() == null
+                    || placement.position() == null
+                    || placement.position() < 1
+                    || placement.position() > maximumPosition) {
+                throw new IllegalArgumentException(
+                        "Every shelf placement must identify a book and a valid slot.");
+            }
+            if (validated.put(placement.bookId(), placement.position()) != null) {
+                throw new IllegalArgumentException("A book can only have one shelf position.");
+            }
+            if (!occupiedSlots.add(placement.position())) {
+                throw new IllegalArgumentException("Two books cannot occupy the same shelf position.");
+            }
+        }
+
+        // Vacate every included row first so the database uniqueness rule does
+        // not reject a valid swap or shift halfway through the transaction.
+        validated.keySet().forEach(bookId ->
+                entityManager.createNativeQuery(
+                        "UPDATE books SET " + column + " = NULL WHERE id = ?1")
+                        .setParameter(1, bookId)
+                        .executeUpdate());
+
+        for (Map.Entry<Long, Integer> placement : validated.entrySet()) {
+            entityManager.createNativeQuery(
+                    "UPDATE books SET " + column + " = ?1 WHERE id = ?2")
+                    .setParameter(1, placement.getValue())
+                    .setParameter(2, placement.getKey())
+                    .executeUpdate();
+        }
     }
 
     @Transactional

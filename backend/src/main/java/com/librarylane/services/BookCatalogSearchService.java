@@ -307,10 +307,16 @@ public class BookCatalogSearchService {
                         cleanedQuery,
                         searchBy))
                 .sorted(Comparator
-                        .comparingInt((CatalogBookResult result) ->
-                                relevance(result, cleanedQuery, searchBy))
-                        .reversed()
-                        .thenComparingInt(BookCatalogSearchService::languageSortRank)
+                        // An exact foreign-language production can otherwise
+                        // outrank the preferred-language narration merely by
+                        // carrying richer storefront metadata. Language is a
+                        // reader-facing edition choice, so settle it before
+                        // comparing completeness within audiobook results.
+                        .comparingInt(BookCatalogSearchService::languageSortRank)
+                        .thenComparing(Comparator.comparingInt(
+                                (CatalogBookResult result) -> relevance(
+                                        result, cleanedQuery, searchBy))
+                                .reversed())
                         .thenComparing(CatalogBookResult::title, String.CASE_INSENSITIVE_ORDER))
                 .forEach(result -> unique.merge(
                         identity(result),
@@ -484,9 +490,11 @@ public class BookCatalogSearchService {
     private static Comparator<CatalogBookResult> leadPreference(
             String cleanedQuery) {
         return Comparator
-                .comparingInt((CatalogBookResult result) ->
-                        leadPreferenceScore(result, cleanedQuery))
-                .reversed();
+                .comparingInt(BookCatalogSearchService::languageSortRank)
+                .thenComparing(Comparator.comparingInt(
+                        (CatalogBookResult result) ->
+                                leadPreferenceScore(result, cleanedQuery))
+                        .reversed());
     }
 
     private static int leadPreferenceScore(
@@ -498,6 +506,12 @@ public class BookCatalogSearchService {
             score += 40;
         } else if (!hasText(result.language())) {
             score += 20;
+        }
+
+        score += completeness(result);
+        if (hasText(result.coverImageUrl())) {
+            score += normalize(result.coverImageUrl()).contains("books google")
+                    ? 45 : 15;
         }
 
         return score;
@@ -713,16 +727,16 @@ public class BookCatalogSearchService {
             System.err.println("Open Library work resolution failed: " + error.getMessage());
         }
 
-        if ("PHYSICAL".equalsIgnoreCase(
-                safeTitle(selectedResult.format()))
-                && selectedResult.pageCount() == null) {
+        if (!"AUDIOBOOK".equalsIgnoreCase(
+                safeTitle(selectedResult.format()))) {
             String selectedIsbn = hasText(selectedResult.isbn13())
                     ? selectedResult.isbn13()
                     : selectedResult.isbn10();
             if (hasText(selectedIsbn)) {
                 Integer exactEditionPages =
                         openLibrary.findPageCountByIsbn(selectedIsbn);
-                if (exactEditionPages != null) {
+                if (shouldUseExactEditionPages(
+                        resolved.pageCount(), exactEditionPages)) {
                     resolved = withPageCount(
                             resolved,
                             exactEditionPages);
@@ -731,15 +745,29 @@ public class BookCatalogSearchService {
         }
         try {
             CatalogBookResult current = resolved;
-            CatalogBookResult supplement = googleBooks.search(
-                            current.title(), current.format(), "TITLE")
+            List<CatalogBookResult> googleCandidates = googleBooks.search(
+                    current.title(), current.format(), "TITLE");
+            List<CatalogBookResult> matchingCandidates = googleCandidates
                     .stream()
                     .filter(candidate -> !looksLikeAncillaryRecord(candidate))
                     .filter(candidate -> exactSameWork(current, candidate))
+                    .toList();
+            CatalogBookResult supplement = matchingCandidates.stream()
                     .max(Comparator.comparingInt(BookCatalogSearchService::completeness))
                     .orElse(null);
             if (supplement != null) {
                 resolved = mergeSelectedWithSupplement(resolved, supplement);
+            }
+
+            CatalogBookResult coverCandidate = matchingCandidates.stream()
+                    .filter(candidate -> hasText(candidate.coverImageUrl()))
+                    .max(Comparator.comparingInt(candidate ->
+                            coverPreference(current, candidate)))
+                    .orElse(null);
+            if (shouldReplaceSelectedCover(current, coverCandidate)) {
+                resolved = withCoverImage(
+                        resolved,
+                        coverCandidate.coverImageUrl());
             }
         } catch (RuntimeException error) {
             System.err.println("Google Books work enrichment failed: " + error.getMessage());
@@ -755,6 +783,16 @@ public class BookCatalogSearchService {
         }
 
         return cleanMetadata(resolved);
+    }
+
+    private static boolean shouldUseExactEditionPages(
+            Integer selectedPages,
+            Integer exactEditionPages) {
+        if (exactEditionPages == null || exactEditionPages <= 0) return false;
+        if (selectedPages == null || selectedPages <= 0) return true;
+
+        int difference = Math.abs(selectedPages - exactEditionPages);
+        return difference > Math.max(40, Math.round(exactEditionPages * 0.2f));
     }
 
     private CatalogBookResult enrichAudiobookWorkFacts(
@@ -2258,6 +2296,81 @@ public class BookCatalogSearchService {
                 result.format()
         );
     }
+
+    private static CatalogBookResult withCoverImage(
+            CatalogBookResult result,
+            String coverImageUrl) {
+        return new CatalogBookResult(
+                result.provider(),
+                result.providerId(),
+                result.title(),
+                result.subtitle(),
+                result.authors(),
+                result.genres(),
+                result.description(),
+                result.publisher(),
+                result.publicationDate(),
+                result.pageCount(),
+                result.audiobookLengthSeconds(),
+                result.narrators(),
+                coverImageUrl,
+                result.language(),
+                result.isbn10(),
+                result.isbn13(),
+                result.seriesName(),
+                result.seriesNumber(),
+                result.editionFormat(),
+                result.format()
+        );
+    }
+
+    private static boolean shouldReplaceSelectedCover(
+            CatalogBookResult selected,
+            CatalogBookResult candidate) {
+        if (candidate == null || !hasText(candidate.coverImageUrl())) {
+            return false;
+        }
+        if (!hasText(selected.coverImageUrl())) return true;
+
+        // Artwork is a work-level display choice rather than edition metadata.
+        // The candidate has already passed exact-title, author, ancillary,
+        // language, and format ranking guards, so it may improve a weak cover
+        // without changing the reader's selected ISBN or edition identity.
+        return !safeTitle(selected.coverImageUrl()).equals(
+                safeTitle(candidate.coverImageUrl()));
+    }
+
+    private static int coverPreference(
+            CatalogBookResult selected,
+            CatalogBookResult candidate) {
+        int score = 0;
+        if (sameIsbn(selected.isbn13(), candidate.isbn13())
+                || sameIsbn(selected.isbn10(), candidate.isbn10())) score += 75;
+        if (normalize(selected.title()).equals(normalize(candidate.title()))) {
+            score += 250;
+        }
+        if (languagesMatch(selected.language(), candidate.language())) {
+            score += 150;
+        }
+        if (normalize(selected.format()).equals(normalize(candidate.format()))) {
+            score += 100;
+        }
+        if (isEnglish(candidate.language())) score += 25;
+        return score + completeness(candidate);
+    }
+
+    private static boolean sameIsbn(String first, String second) {
+        if (!hasText(first) || !hasText(second)) return false;
+        return first.replaceAll("[^0-9Xx]", "")
+                .equalsIgnoreCase(second.replaceAll("[^0-9Xx]", ""));
+    }
+
+    private static boolean languagesMatch(String first, String second) {
+        if (!hasText(first) || !hasText(second)) return false;
+        if (isEnglish(first) && isEnglish(second)) return true;
+        return normalize(first).equals(normalize(second));
+    }
+
     private static CatalogBookResult mergeSelectedWithWork(
             CatalogBookResult selected,
             CatalogBookResult work) {

@@ -128,6 +128,123 @@ class BookCatalogSearchServiceTest {
         assertEquals("9781649374042", resolved.isbn13());
         assertEquals("PHYSICAL", resolved.format());
     }
+
+    @Test
+    void exactIsbnEditionCorrectsAnImplausibleEbookPageCount() {
+        CatalogBookResult selected = new CatalogBookResult(
+                "GOOGLE_BOOKS", "google-iron-flame", "Iron Flame", null,
+                List.of("Rebecca Yarros"), List.of("Fantasy"), null,
+                "Entangled: Red Tower Books", "2023", 860, null,
+                List.of(), "https://example.com/iron-flame.jpg", "en",
+                null, "9781649375858", "The Empyrean", 2.0,
+                "E-Book edition", "EBOOK");
+
+        when(openLibrary.findWorkByIsbn("9781649375858"))
+                .thenReturn(null);
+        when(openLibrary.findPageCountByIsbn("9781649375858"))
+                .thenReturn(623);
+        when(googleBooks.search("Iron Flame", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+
+        CatalogBookResult resolved = service.resolve(selected);
+
+        assertEquals(623, resolved.pageCount());
+        assertEquals("EBOOK", resolved.format());
+    }
+
+    @Test
+    void openLibraryArtworkCanBeReplacedByAStrongSameWorkCover() {
+        CatalogBookResult selected = catalogResult(
+                "OPEN_LIBRARY",
+                "ol-anne",
+                "Anne of Green Gables",
+                "Lucy Maud Montgomery",
+                "https://covers.openlibrary.org/b/id/old-L.jpg",
+                "eng",
+                "9780000000001");
+        CatalogBookResult googleEdition = catalogResult(
+                "GOOGLE_BOOKS",
+                "google-anne",
+                "Anne of Green Gables",
+                "Lucy Maud Montgomery",
+                "https://books.google.com/books/content?id=anne",
+                "en",
+                "9780000000002");
+
+        when(openLibrary.enrichWithWorkDetails(selected)).thenReturn(selected);
+        when(googleBooks.search("Anne of Green Gables", "PHYSICAL", "TITLE"))
+                .thenReturn(List.of(googleEdition));
+
+        CatalogBookResult resolved = service.resolve(selected);
+
+        assertEquals("https://books.google.com/books/content?id=anne",
+                resolved.coverImageUrl());
+        assertEquals("9780000000001", resolved.isbn13());
+        assertEquals("ol-anne", resolved.providerId());
+    }
+
+    @Test
+    void strongerSameWorkCoverDoesNotReplaceSelectedEditionMetadata() {
+        CatalogBookResult selected = catalogResult(
+                "GOOGLE_BOOKS",
+                "selected-fourth-wing",
+                "Fourth Wing",
+                "Rebecca Yarros",
+                "https://books.google.com/selected-cover.jpg",
+                "en",
+                "9781649374042");
+        CatalogBookResult otherEdition = catalogResult(
+                "GOOGLE_BOOKS",
+                "other-fourth-wing",
+                "Fourth Wing",
+                "Rebecca Yarros",
+                "https://books.google.com/other-cover.jpg",
+                "en",
+                "9781649374080");
+
+        when(openLibrary.findWorkByIsbn("9781649374042")).thenReturn(null);
+        when(googleBooks.search("Fourth Wing", "PHYSICAL", "TITLE"))
+                .thenReturn(List.of(otherEdition));
+
+        CatalogBookResult resolved = service.resolve(selected);
+
+        assertEquals("https://books.google.com/other-cover.jpg",
+                resolved.coverImageUrl());
+        assertEquals("9781649374042", resolved.isbn13());
+        assertEquals("selected-fourth-wing", resolved.providerId());
+    }
+
+    private static CatalogBookResult catalogResult(
+            String provider,
+            String providerId,
+            String title,
+            String author,
+            String cover,
+            String language,
+            String isbn13) {
+        return new CatalogBookResult(
+                provider,
+                providerId,
+                title,
+                null,
+                List.of(author),
+                List.of("Fiction"),
+                null,
+                null,
+                "2023",
+                300,
+                null,
+                List.of(),
+                cover,
+                language,
+                null,
+                isbn13,
+                null,
+                null,
+                "Physical edition",
+                "PHYSICAL");
+    }
+
     @Test
     void numberedTitleInfersSeriesNameAndBookNumberWithoutHardCoding() {
         CatalogBookResult numberedTitle = printResult(

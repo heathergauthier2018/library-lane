@@ -447,7 +447,7 @@ class BookCatalogCombinedFormatSearchTest {
                         "Onyx Storm - Flammengeküsst-Reihe",
                         "Rebecca Yarros",
                         "Flammengeküsst-Reihe",
-                        null,
+                        "de",
                         null,
                         "AUDIOBOOK");
         CatalogBookResult englishAudiobook =
@@ -491,6 +491,37 @@ class BookCatalogCombinedFormatSearchTest {
                         .limit(3)
                         .map(CatalogBookResult::providerId)
                         .toList());
+    }
+
+    @Test
+    void explicitAudiobookSearchRanksEnglishBeforeRicherForeignEdition() {
+        CatalogBookResult foreign = resultWithLanguageAndDescription(
+                "Apple Audiobooks",
+                "great-foreign-audio",
+                "Great and Precious Things",
+                "Rebecca Yarros",
+                "Legacy",
+                "de",
+                "A richly described foreign-language production.",
+                "AUDIOBOOK");
+        CatalogBookResult english = resultWithLanguageAndDescription(
+                "Apple Audiobooks",
+                "great-english-audio",
+                "Great and Precious Things",
+                "Rebecca Yarros",
+                null,
+                "en",
+                null,
+                "AUDIOBOOK");
+
+        when(appleAudiobooks.search(
+                "Great and Precious Things", "AUDIOBOOK", "TITLE"))
+                .thenReturn(List.of(foreign, english));
+
+        List<CatalogBookResult> results = service.search(
+                "Great and Precious Things", "AUDIOBOOK", "TITLE");
+
+        assertEquals("great-english-audio", results.getFirst().providerId());
     }
 
     @Test

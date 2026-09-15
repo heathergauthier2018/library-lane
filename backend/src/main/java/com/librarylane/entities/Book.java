@@ -50,6 +50,8 @@ public class Book {
     private String narrator;
     private String catalogProvider;
     private String catalogProviderId;
+    private Integer shelfPosition;
+    private Integer coverShelfPosition;
 
     @Column(length = 5000)
     private String personalNotes;
