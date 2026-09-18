@@ -243,6 +243,7 @@ public class BookCatalogSearchService {
                         result,
                         cleanedQuery,
                         searchBy))
+                .filter(BookCatalogSearchService::isEligibleDiscoveryResult)
                 .sorted(Comparator
                         .comparingInt((CatalogBookResult result) ->
                                 relevance(result, cleanedQuery, searchBy)
@@ -265,7 +266,9 @@ public class BookCatalogSearchService {
             // classic works can have more than 50 highly ranked print/e-book
             // editions; truncating first silently discarded an otherwise
             // trustworthy audiobook before it could be promoted.
-            return prioritizeMixedFormatLeads(ranked, cleanedQuery)
+            return (identifiesSingleWork(ranked, cleanedQuery)
+                    ? prioritizeMixedFormatLeads(ranked, cleanedQuery)
+                    : prioritizeDistinctWorkLeads(ranked, cleanedQuery))
                     .stream()
                     .limit(limit)
                     .toList();
@@ -306,6 +309,7 @@ public class BookCatalogSearchService {
                         result,
                         cleanedQuery,
                         searchBy))
+                .filter(BookCatalogSearchService::isEligibleDiscoveryResult)
                 .sorted(Comparator
                         // An exact foreign-language production can otherwise
                         // outrank the preferred-language narration merely by
@@ -332,6 +336,152 @@ public class BookCatalogSearchService {
                 format == null ? "" : format.trim());
     }
 
+    private static boolean hasExactStandaloneWork(
+            List<CatalogBookResult> ranked,
+            String cleanedQuery) {
+        String queryTitle = canonicalSearchTitle(cleanedQuery);
+        return ranked.stream()
+                .filter(result -> !looksLikeAncillaryRecord(result))
+                .filter(result -> !looksLikeMultiBookBundle(result.title()))
+                .anyMatch(result -> discoveryTitle(result).equals(queryTitle));
+    }
+
+    private static boolean identifiesSingleWork(
+            List<CatalogBookResult> ranked,
+            String cleanedQuery) {
+        if (hasExactStandaloneWork(ranked, cleanedQuery)) return true;
+        List<CatalogBookResult> eligible = ranked.stream()
+                .filter(result -> !looksLikeAncillaryRecord(result))
+                .filter(result -> !looksLikeMultiBookBundle(result.title()))
+                .filter(BookCatalogSearchService::isEligibleDiscoveryResult)
+                .toList();
+
+        Map<String, List<CatalogBookResult>> workGroups = eligible.stream()
+                .collect(java.util.stream.Collectors.groupingBy(
+                        result -> discoveryTitle(result) + "|"
+                                + canonicalPrimaryAuthorKey(result.authors()),
+                        LinkedHashMap::new,
+                        java.util.stream.Collectors.toList()));
+
+        // A partial title can identify one ordinary standalone novel even
+        // when providers also return merchandise, classroom material, and
+        // special-edition titles. If two providers independently expose that
+        // same non-series work in different formats, preserve those editions
+        // for the mixed-format lead group instead of merging them into one
+        // physical discovery card. Broad series queries still remain in
+        // distinct-work discovery so neighboring books are not displaced by
+        // several formats of the first volume.
+        boolean hasMultiFormatStandaloneWork = workGroups.values().stream()
+                .anyMatch(group -> {
+                    String author = canonicalPrimaryAuthorKey(
+                            group.getFirst().authors());
+                    long formatCount = group.stream()
+                            .map(result -> normalize(result.format()))
+                            .filter(value -> Set.of(
+                                    "physical",
+                                    "ebook",
+                                    "audiobook").contains(value))
+                            .distinct()
+                            .count();
+                    if (author.isBlank() || formatCount < 2) return false;
+
+                    boolean belongsToSeriesFamily = eligible.stream()
+                            .filter(result -> canonicalPrimaryAuthorKey(
+                                    result.authors()).equals(author))
+                            .anyMatch(result -> hasText(result.seriesName())
+                                    || seriesMatchesQuery(
+                                            result,
+                                            cleanedQuery));
+                    return !belongsToSeriesFamily;
+                });
+        if (hasMultiFormatStandaloneWork) return true;
+
+        long distinctWorks = eligible.stream()
+                .map(BookCatalogSearchService::discoveryIdentity)
+                .distinct()
+                .limit(2)
+                .count();
+        if (distinctWorks == 1) return true;
+
+        Set<String> authors = eligible.stream()
+                .flatMap(result -> safe(result.authors()).stream())
+                .map(BookCatalogSearchService::canonicalPerson)
+                .filter(author -> !author.isBlank())
+                .collect(java.util.stream.Collectors.toSet());
+        return authors.size() == 1 && eligible.stream().allMatch(result ->
+                queryFamilyTitleMatch(result, cleanedQuery)
+                        || strongWorkTitleMatch(result, cleanedQuery));
+    }
+
+    /**
+     * Live partial title entry discovers distinct works. Formats are resolved
+     * only after the reader has identified the story they meant.
+     */
+    private static List<CatalogBookResult> prioritizeDistinctWorkLeads(
+            List<CatalogBookResult> ranked,
+            String cleanedQuery) {
+        Map<String, List<CatalogBookResult>> workGroups = ranked.stream()
+                .filter(result -> !looksLikeAncillaryRecord(result))
+                .filter(result -> !looksLikeMultiBookBundle(result.title()))
+                .filter(BookCatalogSearchService::isEligibleDiscoveryResult)
+                .collect(java.util.stream.Collectors.groupingBy(
+                        BookCatalogSearchService::discoveryIdentity,
+                        LinkedHashMap::new,
+                        java.util.stream.Collectors.toList()));
+
+        Map<String, Long> authorWorkCounts = workGroups.values().stream()
+                .map(group -> canonicalPrimaryAuthor(group.getFirst().authors()))
+                .filter(author -> !author.isBlank())
+                .collect(java.util.stream.Collectors.groupingBy(
+                        author -> author,
+                        java.util.stream.Collectors.counting()));
+
+        return workGroups.values().stream()
+                .map(group -> group.stream()
+                        .sorted(leadPreference(cleanedQuery))
+                        .reduce(BookCatalogSearchService::merge)
+                        .orElseThrow())
+                .sorted(Comparator
+                        .comparingLong((CatalogBookResult result) ->
+                                authorWorkCounts.getOrDefault(
+                                        canonicalPrimaryAuthor(result.authors()),
+                                        0L))
+                        .reversed()
+                        .thenComparing(Comparator.comparingInt(
+                                (CatalogBookResult result) -> relevance(
+                                        result,
+                                        cleanedQuery,
+                                        "TITLE"))
+                                .reversed())
+                        .thenComparing(CatalogBookResult::title,
+                                String.CASE_INSENSITIVE_ORDER))
+                .toList();
+    }
+
+    private static String discoveryIdentity(CatalogBookResult result) {
+        return discoveryTitle(result) + "|"
+                + canonicalPrimaryAuthor(result.authors());
+    }
+
+    private static String discoveryTitle(CatalogBookResult result) {
+        String title = isAudiobookFormat(result.format())
+                ? audiobookBaseTitle(result.title(), result.seriesName())
+                : result.title();
+        return canonicalSearchTitle(title);
+    }
+
+    private static boolean isEligibleDiscoveryResult(
+            CatalogBookResult result) {
+        if (!isAudiobookFormat(result.format())) return true;
+        String evidence = normalize(String.join(" ",
+                safeTitle(result.title()),
+                safeTitle(result.editionFormat())));
+        return !evidence.contains("dramatized adaptation")
+                && !evidence.contains("graphic audio")
+                && !evidence.matches(".*\\bpart \\d+ of \\d+\\b.*")
+                && !evidence.matches(".*\\(\\d+ of \\d+\\).*");
+    }
+
     /**
      * In an unfiltered title search, readers should not need to scroll through
      * dozens of print editions before discovering that another format exists.
@@ -348,18 +498,52 @@ public class BookCatalogSearchService {
         Set<String> detectedSeriesAuthors = ranked.stream()
                 .filter(result -> seriesMatchesQuery(result, cleanedQuery))
                 .flatMap(result -> safe(result.authors()).stream())
-                .map(BookCatalogSearchService::canonicalPerson)
+                .map(BookCatalogSearchService::canonicalAuthorKey)
                 .filter(value -> !value.isBlank())
                 .collect(java.util.stream.Collectors.toCollection(
                         java.util.LinkedHashSet::new));
+
+        Set<String> corroboratedSeriesAuthors = detectedSeriesAuthors.stream()
+                .filter(author -> ranked.stream()
+                        .filter(result -> seriesMatchesQuery(
+                                result,
+                                cleanedQuery))
+                        .filter(result -> belongsToAuthorFamily(
+                                result,
+                                Set.of(author)))
+                        .limit(2)
+                        .count() >= 2)
+                .collect(java.util.stream.Collectors.toSet());
+
+        Set<String> exactAudiobookAuthorKeys = ranked.stream()
+                .filter(result -> isAudiobookFormat(result.format()))
+                .filter(result -> languageSortRank(result) < 2)
+                .filter(result -> strongWorkTitleMatch(result, cleanedQuery)
+                        || queryFamilyTitleMatch(result, cleanedQuery))
+                .flatMap(result -> safe(result.authors()).stream())
+                .map(BookCatalogSearchService::canonicalAuthorKey)
+                .filter(value -> !value.isBlank())
+                .collect(java.util.stream.Collectors.toSet());
 
         CatalogBookResult canonicalWork = ranked.stream()
                 .filter(result -> !isAudiobookFormat(result.format()))
                 .filter(result -> !looksLikeAncillaryRecord(result))
                 .filter(result -> strongWorkTitleMatch(
                         result,
-                        cleanedQuery))
-                .sorted(leadPreference(cleanedQuery))
+                        cleanedQuery)
+                        || seriesMatchesQuery(result, cleanedQuery))
+                .sorted(Comparator
+                        .comparingInt((CatalogBookResult result) ->
+                                belongsToAuthorFamily(
+                                        result,
+                                        corroboratedSeriesAuthors)
+                                        ? 0 : 1)
+                        .thenComparingInt(result ->
+                                sharesAuthorKey(
+                                        result,
+                                        exactAudiobookAuthorKeys)
+                                        ? 0 : 1)
+                        .thenComparing(leadPreference(cleanedQuery)))
                 .findFirst()
                 .orElseGet(() -> ranked.stream()
                         .filter(result ->
@@ -369,14 +553,25 @@ public class BookCatalogSearchService {
                         .filter(result -> queryFamilyTitleMatch(
                                 result,
                                 cleanedQuery))
-                        .sorted(leadPreference(cleanedQuery))
+                        .sorted(Comparator
+                                .comparingInt((CatalogBookResult result) ->
+                                        belongsToAuthorFamily(
+                                                result,
+                                                corroboratedSeriesAuthors)
+                                                ? 0 : 1)
+                                .thenComparingInt(result ->
+                                        sharesAuthorKey(
+                                                result,
+                                                exactAudiobookAuthorKeys)
+                                                ? 0 : 1)
+                                .thenComparing(leadPreference(cleanedQuery)))
                         .findFirst()
                         .orElse(null));
 
         Set<String> canonicalWorkAuthors = canonicalWork == null
                 ? Set.of()
                 : safe(canonicalWork.authors()).stream()
-                  .map(BookCatalogSearchService::canonicalPerson)
+                  .map(BookCatalogSearchService::canonicalAuthorKey)
                   .filter(value -> !value.isBlank())
                   .collect(java.util.stream.Collectors.toCollection(
                           java.util.LinkedHashSet::new));
@@ -411,6 +606,11 @@ public class BookCatalogSearchService {
                       .filter(result -> belongsToAuthorFamily(
                               result,
                               canonicalSeriesAuthors))
+                      .filter(result -> languageSortRank(result) < 2)
+                      .filter(result -> !looksLikeTranslatedAudiobook(
+                              result, cleanedQuery))
+                      .filter(result -> !looksLikeAncillaryLeadTitle(
+                              result, cleanedQuery))
                       .filter(result -> queryFamilyTitleMatch(
                               result,
                               cleanedQuery))
@@ -425,6 +625,11 @@ public class BookCatalogSearchService {
                         .filter(result -> belongsToAuthorFamily(
                                 result,
                                 canonicalWorkAuthors))
+                        .filter(result -> languageSortRank(result) < 2)
+                        .filter(result -> !looksLikeTranslatedAudiobook(
+                                result, cleanedQuery))
+                        .filter(result -> !looksLikeAncillaryLeadTitle(
+                                result, cleanedQuery))
                         .filter(result -> queryFamilyTitleMatch(
                                 result,
                                 cleanedQuery)
@@ -435,10 +640,17 @@ public class BookCatalogSearchService {
                         .findFirst()
                         .orElse(null);
             }
-            if (lead == null && canonicalSeriesAuthors.isEmpty()) {
+            if (lead == null
+                    && canonicalSeriesAuthors.isEmpty()
+                    && canonicalWorkAuthors.isEmpty()) {
                 lead = ranked.stream()
                         .filter(result -> format.equalsIgnoreCase(
                                 safeTitle(result.format())))
+                        .filter(result -> languageSortRank(result) < 2)
+                        .filter(result -> !looksLikeTranslatedAudiobook(
+                                result, cleanedQuery))
+                        .filter(result -> !looksLikeAncillaryLeadTitle(
+                                result, cleanedQuery))
                         .filter(result -> queryFamilyTitleMatch(
                                 result,
                                 cleanedQuery))
@@ -482,9 +694,45 @@ public class BookCatalogSearchService {
         }
 
         for (CatalogBookResult result : ranked) {
-            if (!promoted.contains(result)) prioritized.add(result);
+            if (!promoted.contains(result)
+                    && languageSortRank(result) < 2
+                    && !looksLikeTranslatedAudiobook(result, cleanedQuery)) {
+                prioritized.add(result);
+            }
         }
         return prioritized;
+    }
+
+    private static boolean looksLikeTranslatedAudiobook(
+            CatalogBookResult result,
+            String cleanedQuery) {
+        if (!isAudiobookFormat(result.format())) return false;
+        if (isEnglish(result.language())) return false;
+        String queryTitle = canonicalSearchTitle(cleanedQuery);
+        String resultTitle = canonicalSearchTitle(result.title());
+        String baseTitle = discoveryTitle(result);
+        return !baseTitle.equals(queryTitle)
+                && !resultTitle.equals(queryTitle)
+                && !resultTitle.startsWith(queryTitle + " ")
+                && !hasMinorLeadingTitleWords(resultTitle, queryTitle);
+    }
+
+    private static boolean hasMinorLeadingTitleWords(
+            String resultTitle,
+            String queryTitle) {
+        String suffix = " " + queryTitle;
+        if (!resultTitle.endsWith(suffix)) return false;
+        String prefix = resultTitle.substring(
+                0,
+                resultTitle.length() - suffix.length()).trim();
+        if (prefix.isBlank()) return true;
+
+        List<String> words = java.util.Arrays.stream(prefix.split(" "))
+                .filter(word -> !word.isBlank())
+                .toList();
+        return words.size() <= 2 && words.stream().allMatch(word ->
+                Set.of("a", "an", "the", "i", "am", "we", "are", "you")
+                        .contains(word));
     }
 
     private static Comparator<CatalogBookResult> leadPreference(
@@ -560,7 +808,7 @@ public class BookCatalogSearchService {
             }
 
             safe(result.authors()).stream()
-                    .map(BookCatalogSearchService::canonicalPerson)
+                    .map(BookCatalogSearchService::canonicalAuthorKey)
                     .filter(value -> !value.isBlank())
                     .distinct()
                     .forEach(author -> counts.merge(
@@ -606,8 +854,42 @@ public class BookCatalogSearchService {
             CatalogBookResult result,
             Set<String> canonicalAuthors) {
         return safe(result.authors()).stream()
-                .map(BookCatalogSearchService::canonicalPerson)
+                .map(BookCatalogSearchService::canonicalAuthorKey)
                 .anyMatch(canonicalAuthors::contains);
+    }
+
+    private static boolean sharesAuthorKey(
+            CatalogBookResult result,
+            Set<String> canonicalAuthorKeys) {
+        if (canonicalAuthorKeys.isEmpty()) return false;
+        return safe(result.authors()).stream()
+                .map(BookCatalogSearchService::canonicalAuthorKey)
+                .anyMatch(canonicalAuthorKeys::contains);
+    }
+
+    private static String canonicalPrimaryAuthorKey(List<String> authors) {
+        return safe(authors).stream()
+                .filter(BookCatalogSearchService::hasText)
+                .map(BookCatalogSearchService::canonicalAuthorKey)
+                .filter(value -> !value.isBlank())
+                .sorted()
+                .findFirst()
+                .orElse("");
+    }
+
+    private static String canonicalAuthorKey(String value) {
+        String normalized = normalize(value);
+        if (normalized.isBlank()) return "";
+        String[] words = normalized.split(" ");
+        if (words.length == 1) return words[0];
+        String surname = words[words.length - 1];
+        String initials = java.util.Arrays.stream(words, 0, words.length - 1)
+                .filter(word -> !word.isBlank())
+                .map(word -> word.substring(0, 1))
+                .sorted()
+                .reduce((left, right) -> left + right)
+                .orElse("");
+        return surname + "|" + initials;
     }
 
     private static boolean queryFamilyTitleMatch(
@@ -618,6 +900,7 @@ public class BookCatalogSearchService {
         String resultTitle = canonicalSearchTitle(result.title());
         return resultTitle.equals(queryTitle)
                 || resultTitle.startsWith(queryTitle + " ")
+                || hasMinorLeadingTitleWords(resultTitle, queryTitle)
                 || seriesMatchesQuery(result, cleanedQuery);
     }
 
@@ -629,7 +912,8 @@ public class BookCatalogSearchService {
         String queryTitle = canonicalSearchTitle(cleanedQuery);
         String resultTitle = canonicalSearchTitle(result.title());
         if (resultTitle.equals(queryTitle)) return true;
-        if (queryTitle.split(" ").length >= 4
+        if (!isAudiobookFormat(result.format())
+                && queryTitle.split(" ").length >= 4
                 && resultTitle.endsWith(" " + queryTitle)) {
             return true;
         }
@@ -638,6 +922,10 @@ public class BookCatalogSearchService {
         // which should not push the actual recording beneath loosely related
         // print editions.
         if (isAudiobookFormat(result.format())) {
+            String baseTitle = canonicalSearchTitle(audiobookBaseTitle(
+                    result.title(),
+                    result.seriesName()));
+            if (baseTitle.equals(queryTitle)) return true;
             String withoutTrailingParenthetical = canonicalSearchTitle(
                     safeTitle(result.title())
                             .replaceFirst(
@@ -1637,7 +1925,8 @@ public class BookCatalogSearchService {
         do {
             previous = title;
             title = title.replaceFirst(
-                    "(?i)\\s*\\([^)]*(?:dramatized|adaptation|unabridged|abridged|part\\s*\\d+)[^)]*\\)\\s*$",
+                    "(?i)\\s*\\([^)]*(?:dramatized|adaptation|unabridged|abridged|"
+                            + "anniversary\\s+recording|part\\s*\\d+)[^)]*\\)\\s*$",
                     "").trim();
         } while (!title.equals(previous));
 
@@ -1812,7 +2101,17 @@ public class BookCatalogSearchService {
 
     private static boolean looksLikeAncillaryWork(String value) {
         String title = normalize(value);
-        return title.contains(" word search")
+        return title.startsWith("workbook ")
+                || title.startsWith("study guide ")
+                || title.startsWith("summary of ")
+                || title.startsWith("analysis of ")
+                || title.startsWith("author of ")
+                || title.startsWith("teacher guide ")
+                || title.startsWith("teacher s guide ")
+                || title.startsWith("novel unit ")
+                || title.startsWith("interactive notebook ")
+                || title.startsWith("graphic organizers ")
+                || title.contains(" word search")
                 || title.contains(" coloring book")
                 || title.contains(" activity book")
                 || title.contains(" canvas bag")
@@ -1828,9 +2127,7 @@ public class BookCatalogSearchService {
                 || title.contains(" companion")
                 || title.contains(" amazing facts")
                 || title.contains(" and philosophy")
-                || title.startsWith("summary of ")
-                || title.startsWith("analysis of ")
-                || title.startsWith("author of ");
+                || title.contains(" workbook for ");
     }
 
     private static boolean looksLikeAncillaryRecord(
@@ -1857,6 +2154,18 @@ public class BookCatalogSearchService {
                 || evidence.contains("literature unit");
     }
 
+    private static boolean looksLikeAncillaryLeadTitle(
+            CatalogBookResult result,
+            String cleanedQuery) {
+        if (looksLikeMultiBookBundle(result.title())) return true;
+        String queryTitle = canonicalSearchTitle(cleanedQuery);
+        String resultTitle = canonicalSearchTitle(result.title());
+        return (!queryTitle.contains("journal")
+                && resultTitle.contains("journal"))
+                || (!queryTitle.contains("diary")
+                && resultTitle.contains("diary"));
+    }
+
     private static boolean looksLikeMultiBookBundle(String value) {
         String title = normalize(value);
         return title.contains(" box set")
@@ -1865,6 +2174,8 @@ public class BookCatalogSearchService {
                 || title.contains(" complete collection")
                 || title.contains(" holiday collection")
                 || title.contains(" omnibus")
+                || title.matches(".*\\b\\d+\\s+novels?\\b.*")
+                || safeTitle(value).contains("/")
                 || title.matches(".*\\bbooks?\\s+\\d+\\s*[-–—]\\s*\\d+\\b.*")
                 || title.matches(".*\\b\\d+\\s*[-–—]\\s*book\\s+(?:set|collection)\\b.*");
     }

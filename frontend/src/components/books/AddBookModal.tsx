@@ -191,6 +191,32 @@ function editionCompleteness(result: CatalogBookResult) {
   ].filter((value) => value !== null && value !== undefined && value !== "").length;
 }
 
+function publisherSelection(publisher?: string | null) {
+  const value = normalizedCatalogText(publisher);
+  if (!value) return { publisher: "", publisherOther: "" };
+  const known = [
+    ["penguin random house", "PENGUIN_RANDOM_HOUSE"],
+    ["harpercollins", "HARPERCOLLINS"],
+    ["simon schuster", "SIMON_AND_SCHUSTER"],
+    ["macmillan", "MACMILLAN"],
+    ["hachette", "HACHETTE"],
+    ["scholastic", "SCHOLASTIC"],
+    ["bloomsbury", "BLOOMSBURY"],
+    ["sourcebooks", "SOURCEBOOKS"],
+    ["entangled", "ENTANGLED"],
+    ["berkley", "BERKLEY"],
+    ["wednesday books", "WEDNESDAY_BOOKS"],
+    ["del rey", "DEL_REY"],
+    ["avon", "AVON"],
+    ["orbit", "ORBIT"],
+    ["tor", "TOR"],
+  ] as const;
+  const match = known.find(([name]) => value.includes(name));
+  return match
+    ? { publisher: match[1], publisherOther: "" }
+    : { publisher: "OTHER", publisherOther: publisher?.trim() || "" };
+}
+
 type AddBookModalProps = {
   isOpen: boolean;
   onClose: () => void;
@@ -1159,17 +1185,21 @@ export default function AddBookModal({
     useState<CatalogBookResult[]>([]);
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
   const [coverSearchMessage, setCoverSearchMessage] = useState("");
+  const catalogRequestRef = useRef(0);
+  const formatRequestRef = useRef(0);
 
   const ledgerPages = useMemo(() => {
     return getLedgerPages(book);
   }, [book]);
 
   useEffect(() => {
+    const requestId = ++catalogRequestRef.current;
     const query = catalogQuery.trim();
 
     if (query.length < 3 || !activeCatalogField) return;
 
     let active = true;
+    const controller = new AbortController();
     const timeout = window.setTimeout(async () => {
       setCatalogSearching(true);
       setCatalogMessage("");
@@ -1181,10 +1211,11 @@ export default function AddBookModal({
         const results = await catalogApi.searchBooks(
           query,
           undefined,
-          catalogSearchField(activeCatalogField)
+          catalogSearchField(activeCatalogField),
+          controller.signal,
         );
 
-        if (!active) return;
+        if (!active || requestId !== catalogRequestRef.current) return;
         setCatalogResults(results);
         setCatalogMessage(
           results.length === 0
@@ -1196,14 +1227,17 @@ export default function AddBookModal({
             : ""
         );
       } catch (error) {
-        if (!active) return;
+        if (!active || requestId !== catalogRequestRef.current) return;
+        if (error instanceof DOMException && error.name === "AbortError") return;
         console.error("Catalog search failed", error);
         setCatalogResults([]);
         setCatalogMessage(
           "The catalog is unavailable. Manual entry is still available."
         );
       } finally {
-        if (active) setCatalogSearching(false);
+        if (active && requestId === catalogRequestRef.current) {
+          setCatalogSearching(false);
+        }
       }
       // A slightly longer pause prevents a separate Apple request for nearly
       // every partial word while leaving the established results unchanged.
@@ -1211,6 +1245,7 @@ export default function AddBookModal({
 
     return () => {
       active = false;
+      controller.abort();
       window.clearTimeout(timeout);
     };
   }, [catalogQuery, activeCatalogField]);
@@ -1221,12 +1256,15 @@ export default function AddBookModal({
     if (frontendFormat(selectedCatalogWork.format) === requestedFormat) return;
 
     let active = true;
+    const requestId = ++formatRequestRef.current;
+    const controller = new AbortController();
     void (async () => {
       try {
         const matches = await catalogApi.searchBooks(
           selectedCatalogWork.title,
           requestedFormat,
           "TITLE",
+          controller.signal,
         );
         const matchingEdition = matches
           .filter((candidate) => sameCatalogWork(selectedCatalogWork, candidate))
@@ -1234,7 +1272,7 @@ export default function AddBookModal({
             preferredLanguageRank(left.language) - preferredLanguageRank(right.language) ||
             editionCompleteness(right) - editionCompleteness(left)
           )[0];
-        if (!matchingEdition || !active) {
+        if (!matchingEdition || !active || requestId !== formatRequestRef.current) {
           setCatalogMessage(
             `No ${requestedFormat.toLowerCase().replace("ebook", "e-book")} edition was found. Your story details were preserved for manual entry.`,
           );
@@ -1246,21 +1284,20 @@ export default function AddBookModal({
         } catch (error) {
           console.warn("Format-specific catalog enrichment failed", error);
         }
-        if (!active) return;
-        const publisher = resolved.publisher?.trim() || "";
+        if (!active || requestId !== formatRequestRef.current) return;
+        const publisher = publisherSelection(resolved.publisher);
         setBook((previous) => ({
           ...previous,
           format: requestedFormat,
-          publisher: publisher ? "OTHER" : previous.publisher,
-          publisherOther: publisher || previous.publisherOther,
-          publicationYear:
-            resolved.publicationDate?.slice(0, 4) || previous.publicationYear,
+          publisher: publisher.publisher,
+          publisherOther: publisher.publisherOther,
+          publicationYear: resolved.publicationDate?.slice(0, 4) || "",
           pageCount:
             requestedFormat === "AUDIOBOOK"
               ? ""
               : resolved.pageCount
                 ? String(resolved.pageCount)
-                : previous.pageCount,
+                : "",
           audioLength:
             requestedFormat === "AUDIOBOOK"
               ? durationLabel(resolved.audiobookLengthSeconds)
@@ -1269,17 +1306,19 @@ export default function AddBookModal({
             requestedFormat === "AUDIOBOOK"
               ? resolved.narrators.join(", ")
               : "",
-          description: resolved.description || previous.description,
-          coverUrl: resolved.coverImageUrl || previous.coverUrl,
-          language: resolved.language || previous.language,
+          description: resolved.description || selectedCatalogWork.description || "",
+          coverUrl: resolved.coverImageUrl
+            ? preferredCoverUrl(resolved.coverImageUrl)
+            : "",
+          language: resolved.language || "",
           isbn10: resolved.isbn10 || "",
           isbn13: resolved.isbn13 || "",
           catalogProvider: resolved.provider,
           catalogProviderId: resolved.providerId,
         }));
-        setSelectedCatalogWork(resolved);
         setCatalogMessage("");
       } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
         console.warn("Format-specific catalog lookup failed", error);
         if (active) {
           setCatalogMessage(
@@ -1287,11 +1326,14 @@ export default function AddBookModal({
           );
         }
       } finally {
-        if (active) setFormatResolving(false);
+        if (active && requestId === formatRequestRef.current) {
+          setFormatResolving(false);
+        }
       }
     })();
     return () => {
       active = false;
+      controller.abort();
     };
   }, [book.format, selectedCatalogWork]);
 
@@ -1330,6 +1372,8 @@ export default function AddBookModal({
       });
       const choices = [...unique.values()]
         .sort((left, right) =>
+          Number(frontendFormat(left.format) !== book.format) -
+            Number(frontendFormat(right.format) !== book.format) ||
           preferredLanguageRank(left.language) - preferredLanguageRank(right.language) ||
           editionCompleteness(right) - editionCompleteness(left)
         )
@@ -1495,10 +1539,19 @@ export default function AddBookModal({
       if (field === "format" && previous.format !== value) {
         next = {
           ...next,
+          publisher: "",
+          publisherOther: "",
+          publicationYear: "",
           editionFormat: "",
-          pageCount: value === "AUDIOBOOK" ? "" : next.pageCount,
-          audioLength: value === "AUDIOBOOK" ? next.audioLength : "",
-          narrator: value === "AUDIOBOOK" ? next.narrator : "",
+          pageCount: "",
+          audioLength: "",
+          narrator: "",
+          coverUrl: "",
+          language: "",
+          isbn10: "",
+          isbn13: "",
+          catalogProvider: "",
+          catalogProviderId: "",
         };
       }
 
@@ -1535,7 +1588,7 @@ export default function AddBookModal({
       console.warn("Catalog detail enrichment failed", error);
     }
 
-    const publisher = result.publisher?.trim() || "";
+    const publisher = publisherSelection(result.publisher);
     const seriesName = displaySeriesName(
       result.seriesName || seriesSearchName
     );
@@ -1548,8 +1601,8 @@ export default function AddBookModal({
       genre: usefulGenres(result.genres),
       description: result.description || "",
       format: frontendFormat(result.format),
-      publisher: publisher ? "OTHER" : "",
-      publisherOther: publisher,
+      publisher: publisher.publisher,
+      publisherOther: publisher.publisherOther,
       publicationYear: result.publicationDate?.slice(0, 4) || "",
       // Catalog labels such as "Book catalog record" and "E-Book edition"
       // do not identify the reader's actual hardcover, paperback, sprayed-edge,

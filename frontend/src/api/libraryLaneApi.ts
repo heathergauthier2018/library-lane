@@ -136,7 +136,8 @@ export const catalogApi = {
   searchBooks(
     query: string,
     format?: CatalogBookFormat,
-    searchBy: CatalogSearchField = "TITLE"
+    searchBy: CatalogSearchField = "TITLE",
+    signal?: AbortSignal,
   ) {
     const params = new URLSearchParams({ q: query.trim() });
 
@@ -144,7 +145,8 @@ export const catalogApi = {
     params.set("searchBy", searchBy);
 
     return request<CatalogBookResult[]>(
-      `/api/catalog/books/search?${params.toString()}`
+      `/api/catalog/books/search?${params.toString()}`,
+      { signal },
     );
   },
 
