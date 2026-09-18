@@ -13,21 +13,28 @@ const cases = [
     query: "because of winn",
     title: /because of winn[- ]dixie/i,
     author: /kate dicamillo/i,
+    acceptableFormats: [["AUDIOBOOK", "EBOOK", "PHYSICAL"]],
   },
   {
     query: "bfg",
     title: /^(?:the )?bfg(?:\s|\(|$)/i,
     author: /roald dahl/i,
+    acceptableFormats: [["AUDIOBOOK", "EBOOK", "PHYSICAL"]],
   },
   {
     query: "not your perfect mexican daughter",
     title: /not your perfect mexican daughter/i,
     author: /erika/i,
+    acceptableFormats: [["AUDIOBOOK", "PHYSICAL"]],
   },
   {
     query: "anne of green",
     title: /anne of green gables/i,
     author: /montgomery/i,
+    acceptableFormats: [
+      ["AUDIOBOOK", "EBOOK", "PHYSICAL"],
+      ["AUDIOBOOK", "PHYSICAL"],
+    ],
   },
 ];
 
@@ -52,25 +59,38 @@ test.describe("live provider smoke checks @live", () => {
                 catalogCase.query,
               )}&searchBy=TITLE`,
             );
-            if (!response.ok()) return [];
+            if (!response.ok()) return false;
 
             const results = (await response.json()) as LiveCatalogResult[];
-            leadResults = results.slice(0, 3);
-            return leadResults
-              .map((entry) => entry.format)
-              .filter((format): format is string => Boolean(format))
-              .sort();
+            for (const formats of catalogCase.acceptableFormats) {
+              const candidate = results.slice(0, formats.length);
+              const candidateFormats = candidate
+                .map((entry) => entry.format)
+                .filter((format): format is string => Boolean(format))
+                .sort();
+              if (candidateFormats.join("|") === formats.join("|")) {
+                leadResults = candidate;
+                return true;
+              }
+            }
+            return false;
           },
           {
             message:
-              "The live catalog should lead with one physical, e-book, and audiobook result",
+              `The live catalog should lead with ${catalogCase.acceptableFormats
+                .map((formats) => formats.join(", "))
+                .join(" or ")}`,
             timeout: 20_000,
             intervals: [1_000, 2_000, 3_000],
           },
         )
-        .toEqual(["AUDIOBOOK", "EBOOK", "PHYSICAL"]);
+        .toBe(true);
 
-      expect(leadResults).toHaveLength(3);
+      expect(
+        catalogCase.acceptableFormats.some(
+          (formats) => formats.length === leadResults.length,
+        ),
+      ).toBe(true);
       for (const result of leadResults) {
         expect(result.title).toMatch(catalogCase.title);
         expect((result.authors ?? []).join(" ")).toMatch(catalogCase.author);

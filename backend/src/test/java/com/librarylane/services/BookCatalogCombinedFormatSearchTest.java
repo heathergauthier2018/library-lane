@@ -715,6 +715,293 @@ class BookCatalogCombinedFormatSearchTest {
                 .search("Queen", "AUDIOBOOK", "TITLE");
     }
 
+    @Test
+    void partialTitleDiscoveryReturnsDistinctAcotarWorksInsteadOfFormats() {
+        CatalogBookResult thornsPrint = resultWithMetadata(
+                "Open Library", "thorns-print",
+                "A Court of Thorns and Roses", "Sarah J. Maas", null,
+                "PHYSICAL");
+        CatalogBookResult thornsEbook = resultWithMetadata(
+                "Google Books", "thorns-ebook",
+                "A Court of Thorns and Roses", "Sarah J. Maas", null,
+                "EBOOK");
+        CatalogBookResult mist = resultWithMetadata(
+                "Open Library", "mist-print",
+                "A Court of Mist and Fury", "Sarah J. Maas", null,
+                "PHYSICAL");
+        CatalogBookResult wings = resultWithMetadata(
+                "Apple Audiobooks", "wings-audio",
+                "A Court of Wings and Ruin", "Sarah J. Maas",
+                "Court of Thorns and Roses", "AUDIOBOOK");
+        CatalogBookResult unrelated = resultWithMetadata(
+                "Open Library", "inquiry-print",
+                "A Court of Inquiry", "Grace Richmond", null,
+                "PHYSICAL");
+
+        when(openLibrary.search("a court of", null, "TITLE"))
+                .thenReturn(List.of(thornsPrint, mist, unrelated));
+        when(googleBooks.search("a court of", null, "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search("a court of", "EBOOK", "TITLE"))
+                .thenReturn(List.of(thornsEbook));
+        when(appleAudiobooks.search("a court of", "AUDIOBOOK", "TITLE"))
+                .thenReturn(List.of(wings));
+
+        List<CatalogBookResult> results = service.search(
+                "a court of", null, "TITLE");
+
+        assertEquals(
+                List.of(
+                        "A Court of Mist and Fury",
+                        "A Court of Thorns and Roses",
+                        "A Court of Wings and Ruin"),
+                results.stream().limit(3).map(CatalogBookResult::title).toList());
+        assertEquals(1, results.stream().filter(result ->
+                result.title().equals("A Court of Thorns and Roses")).count());
+    }
+
+    @Test
+    void partialStandaloneTitlePreservesFormatsDespiteNoisyDiscoveryResults() {
+        CatalogBookResult physical = resultWithMetadata(
+                "Open Library", "winn-physical",
+                "Because of Winn-Dixie", "Kate DiCamillo", null,
+                "PHYSICAL");
+        CatalogBookResult teacherGuide = resultWithMetadata(
+                "Open Library", "winn-teacher-guide",
+                "Teacher's Guide Classroom Worksheets Because of Winn-Dixie",
+                "Guide Author", null, "PHYSICAL");
+        CatalogBookResult ebook = resultWithMetadata(
+                "Google Books", "winn-ebook",
+                "Because of Winn-Dixie", "Kate DiCamillo", null,
+                "EBOOK");
+        CatalogBookResult audiobook = resultWithMetadata(
+                "Apple Audiobooks", "winn-audio",
+                "Because of Winn-Dixie", "Kate DiCamillo", null,
+                "AUDIOBOOK");
+
+        when(openLibrary.search("because of winn", null, "TITLE"))
+                .thenReturn(List.of(teacherGuide, physical));
+        when(googleBooks.search("because of winn", null, "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search("because of winn", "EBOOK", "TITLE"))
+                .thenReturn(List.of(ebook));
+        when(appleAudiobooks.search(
+                "because of winn", "AUDIOBOOK", "TITLE"))
+                .thenReturn(List.of(audiobook));
+
+        List<CatalogBookResult> results = service.search(
+                "because of winn", null, "TITLE");
+
+        assertEquals(
+                List.of("PHYSICAL", "EBOOK", "AUDIOBOOK"),
+                results.stream()
+                        .limit(3)
+                        .map(CatalogBookResult::format)
+                        .toList());
+        assertTrue(results.stream().limit(3).allMatch(result ->
+                result.title().equals("Because of Winn-Dixie")));
+        assertFalse(results.stream().anyMatch(result ->
+                result.providerId().equals("winn-teacher-guide")));
+    }
+
+    @Test
+    void partialTitleKeepsAudiobookWhenReaderOmitsLeadingTitleWords() {
+        CatalogBookResult physical = resultWithLanguageAndDescription(
+                "Open Library", "daughter-physical",
+                "I Am Not Your Perfect Mexican Daughter",
+                "Erika L. Sanchez", null, "eng", null, "PHYSICAL");
+        CatalogBookResult alternatePhysical = resultWithMetadata(
+                "Open Library", "daughter-physical-alternate",
+                "I Am Not Your Perfect Mexican Daughter",
+                "Erika L. Sanchez", null, "PHYSICAL");
+        CatalogBookResult audiobook = resultWithLanguageAndDescription(
+                "Apple Audiobooks", "daughter-audio",
+                "I Am Not Your Perfect Mexican Daughter (Unabridged)",
+                "Erika L. Sanchez", null, null, null, "AUDIOBOOK");
+
+        when(openLibrary.search(
+                "not your perfect mexican daughter", null, "TITLE"))
+                .thenReturn(List.of(physical, alternatePhysical));
+        when(googleBooks.search(
+                "not your perfect mexican daughter", null, "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search(
+                "not your perfect mexican daughter", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(appleAudiobooks.search(
+                "not your perfect mexican daughter", "AUDIOBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search(
+                "I Am Not Your Perfect Mexican Daughter", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(appleAudiobooks.search(
+                "I Am Not Your Perfect Mexican Daughter",
+                "AUDIOBOOK",
+                "TITLE"))
+                .thenReturn(List.of(audiobook));
+
+        List<CatalogBookResult> results = service.search(
+                "not your perfect mexican daughter", null, "TITLE");
+
+        assertEquals(
+                List.of("PHYSICAL", "AUDIOBOOK"),
+                results.stream()
+                        .limit(2)
+                        .map(CatalogBookResult::format)
+                        .toList());
+        assertTrue(results.stream().limit(2).allMatch(result ->
+                result.title().contains("Not Your Perfect Mexican Daughter")));
+    }
+
+    @Test
+    void exactAudiobookAuthorGuidesCanonicalPhysicalLead() {
+        CatalogBookResult adaptation = resultWithMetadata(
+                "Open Library", "anne-adaptation",
+                "Anne of Green Gables", "Adaptation Staff", null,
+                "PHYSICAL");
+        CatalogBookResult original = resultWithMetadata(
+                "Open Library", "anne-original",
+                "Anne of Green Gables", "Lucy Maud Montgomery", null,
+                "PHYSICAL");
+        CatalogBookResult audiobook = resultWithLanguageAndDescription(
+                "Apple Audiobooks", "anne-audio",
+                "Anne of Green Gables", "L. M. Montgomery", null,
+                null, null, "AUDIOBOOK");
+
+        when(openLibrary.search("anne of green", null, "TITLE"))
+                .thenReturn(List.of(adaptation, original));
+        when(googleBooks.search("anne of green", null, "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search("anne of green", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(appleAudiobooks.search(
+                "anne of green", "AUDIOBOOK", "TITLE"))
+                .thenReturn(List.of(audiobook));
+
+        List<CatalogBookResult> results = service.search(
+                "anne of green", null, "TITLE");
+
+        assertEquals("anne-original", results.getFirst().providerId());
+        assertEquals("anne-audio", results.get(1).providerId());
+    }
+
+    @Test
+    void companionJournalAndDiaryDoNotDisplaceCanonicalAnneLeads() {
+        CatalogBookResult journal = resultWithMetadata(
+                "Open Library", "anne-journal",
+                "Anne of Green Gables Journal", "Lucy Maud Montgomery",
+                null, "PHYSICAL");
+        CatalogBookResult diary = resultWithMetadata(
+                "Open Library", "anne-diary",
+                "The Anne of Green Gables Diary", "Lucy Maud Montgomery",
+                null, "EBOOK");
+        CatalogBookResult collection = resultWithMetadata(
+                "Open Library", "anne-eight-novels",
+                "The Anne of Green Gables novels [8 novels]",
+                "Lucy Maud Montgomery", null, "EBOOK");
+        CatalogBookResult adaptation = resultWithMetadata(
+                "Open Library", "anne-adaptation-ebook",
+                "Anne of Green Gables", "Adaptation Writer",
+                null, "EBOOK");
+        CatalogBookResult original = resultWithMetadata(
+                "Open Library", "anne-original",
+                "Anne of Green Gables", "Lucy Maud Montgomery",
+                null, "PHYSICAL");
+        CatalogBookResult audiobook = resultWithLanguageAndDescription(
+                "Apple Audiobooks", "anne-audio",
+                "Anne of Green Gables", "L. M. Montgomery", null,
+                null, null, "AUDIOBOOK");
+
+        when(openLibrary.search("anne of green", null, "TITLE"))
+                .thenReturn(List.of(
+                        journal,
+                        diary,
+                        collection,
+                        adaptation,
+                        original));
+        when(googleBooks.search("anne of green", null, "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search("anne of green", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(appleAudiobooks.search(
+                "anne of green", "AUDIOBOOK", "TITLE"))
+                .thenReturn(List.of(audiobook));
+
+        List<CatalogBookResult> results = service.search(
+                "anne of green", null, "TITLE");
+
+        assertEquals(
+                List.of("anne-original", "anne-audio"),
+                results.stream()
+                        .limit(2)
+                        .map(CatalogBookResult::providerId)
+                        .toList());
+    }
+
+    @Test
+    void exactAcotarSearchRejectsBundlesForeignAndDramatizedLeads() {
+        CatalogBookResult bundle = resultWithLanguageAndDescription(
+                "Open Library", "acotar-bundle",
+                "Throne of Glass / A Court of Thorns and Roses",
+                "Sarah J. Maas", null, "eng", null, "PHYSICAL");
+        CatalogBookResult physical = resultWithLanguageAndDescription(
+                "Open Library", "acotar-physical",
+                "A Court of Thorns and Roses",
+                "Sarah J. Maas", null, "eng", null, "PHYSICAL");
+        CatalogBookResult workbook = resultWithLanguageAndDescription(
+                "Open Library", "acotar-workbook",
+                "Workbook of A Court of Thorns and Roses",
+                "Houseam Elmassi", null, "eng", null, "PHYSICAL");
+        CatalogBookResult germanEbook = resultWithLanguageAndDescription(
+                "Open Library", "acotar-ebook-de",
+                "A Court of Thorns and Roses",
+                "Sarah J. Maas", null, "ger", null, "EBOOK");
+        CatalogBookResult dramatized = new CatalogBookResult(
+                "Apple Audiobooks", "acotar-drama",
+                "A Court of Thorns and Roses (1 of 2) [Dramatized Adaptation]",
+                null, List.of("Sarah J. Maas"), List.of(), null,
+                "Graphic Audio LLC", null, null, 20_000, List.of(),
+                "https://example.com/drama.jpg", null, null, null,
+                "Court of Thorns and Roses", 1.0,
+                "Dramatized Adaptation - Part 1 of 2", "AUDIOBOOK");
+        CatalogBookResult germanAudio = resultWithLanguageAndDescription(
+                "Apple Audiobooks", "acotar-audio-de",
+                "Dornen und Rosen: A Court of Thorns and Roses",
+                "Sarah J. Maas", null, null, null, "AUDIOBOOK");
+        CatalogBookResult englishAudio = resultWithLanguageAndDescription(
+                "Apple Audiobooks", "acotar-audio-en",
+                "A Court of Thorns and Roses (10th Anniversary Recording) (Court of Thorns and Roses)",
+                "Sarah J. Maas", "Court of Thorns and Roses", null, null,
+                "AUDIOBOOK");
+
+        when(openLibrary.search(
+                "a court of thorns and roses", null, "TITLE"))
+                .thenReturn(List.of(workbook, bundle, physical, germanEbook));
+        when(googleBooks.search(
+                "a court of thorns and roses", null, "TITLE"))
+                .thenReturn(List.of());
+        when(googleBooks.search(
+                "a court of thorns and roses", "EBOOK", "TITLE"))
+                .thenReturn(List.of());
+        when(appleAudiobooks.search(
+                "a court of thorns and roses", "AUDIOBOOK", "TITLE"))
+                .thenReturn(List.of(dramatized, germanAudio, englishAudio));
+
+        List<CatalogBookResult> results = service.search(
+                "a court of thorns and roses", null, "TITLE");
+
+        assertEquals(
+                List.of("acotar-physical", "acotar-audio-en"),
+                results.stream().limit(2).map(CatalogBookResult::providerId).toList());
+        assertFalse(results.stream().anyMatch(result ->
+                result.providerId().equals("acotar-bundle")
+                        || result.providerId().equals("acotar-workbook")
+                        || result.providerId().equals("acotar-drama")));
+        assertFalse(results.stream().limit(3).anyMatch(result ->
+                "ger".equals(result.language())
+                        || result.providerId().equals("acotar-audio-de")));
+    }
+
     private static CatalogBookResult result(
             String provider,
             String providerId,
