@@ -12,7 +12,6 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.hamcrest.Matchers.containsString;
-import static org.springframework.test.web.client.ExpectedCount.twice;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
@@ -46,7 +45,7 @@ class GoogleBooksCatalogServiceTest {
                 }
                 """;
 
-        server.expect(twice(), requestTo(containsString("filter=ebooks")))
+        server.expect(requestTo(containsString("filter=ebooks")))
                 .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
 
         List<CatalogBookResult> results =

@@ -117,6 +117,74 @@ class AppleAudiobookCatalogServiceTest {
     }
 
     @Test
+    void extractsNarratorFromAppleIntroductionCopy() {
+        String json = """
+                {
+                  "resultCount": 1,
+                  "results": [{
+                    "wrapperType": "audiobook",
+                    "collectionId": 24680,
+                    "collectionName": "A Court of Thorns and Roses: 10th Anniversary Edition",
+                    "artistName": "Sarah J. Maas",
+                    "description": "Sarah chose narrator and friend Elizabeth Evans to bring the story to life.",
+                    "releaseDate": "2025-05-06T07:00:00Z"
+                  }]
+                }
+                """;
+
+        server.expect(request -> {})
+                .andRespond(withSuccess(json, MediaType.APPLICATION_JSON));
+        expectEmptyGeneralSearch();
+
+        List<CatalogBookResult> results = service.search(
+                "A Court of Thorns and Roses",
+                "AUDIOBOOK",
+                "TITLE");
+
+        assertEquals(List.of("Elizabeth Evans"), results.getFirst().narrators());
+        server.verify();
+    }
+
+    @Test
+    void exactTitlePrefersStandardRecordingOverRicherAnniversaryEdition() {
+        String json = """
+                {
+                  "resultCount": 2,
+                  "results": [
+                    {
+                      "collectionId": 2015,
+                      "collectionName": "A Court of Thorns and Roses (Court of Thorns and Roses)",
+                      "artistName": "Sarah J. Maas",
+                      "description": "The original unabridged recording.",
+                      "releaseDate": "2015-05-05T07:00:00Z",
+                      "artworkUrl100": "https://example.test/standard/100x100bb.jpg"
+                    },
+                    {
+                      "collectionId": 2025,
+                      "collectionName": "A Court of Thorns and Roses (10th Anniversary Recording) (Court of Thorns and Roses)",
+                      "artistName": "Sarah J. Maas",
+                      "description": "The anniversary edition with narrator and friend Elizabeth Evans to bring the story to life.",
+                      "releaseDate": "2025-05-30T07:00:00Z",
+                      "artworkUrl100": "https://example.test/anniversary/100x100bb.jpg"
+                    }
+                  ]
+                }
+                """;
+
+        server.expect(request -> {})
+                .andRespond(withSuccess(json, MediaType.APPLICATION_JSON));
+        expectEmptyGeneralSearch();
+
+        List<CatalogBookResult> results = service.search(
+                "A Court of Thorns and Roses", "AUDIOBOOK", "TITLE");
+
+        assertEquals("2015", results.getFirst().providerId());
+        assertTrue(results.getFirst().title().contains("Court of Thorns and Roses"));
+        assertFalse(results.getFirst().title().contains("Anniversary"));
+        server.verify();
+    }
+
+    @Test
     void bestsellerCopyDoesNotBecomeBookOne() {
         server.expect(request -> {})
                 .andRespond(withSuccess(

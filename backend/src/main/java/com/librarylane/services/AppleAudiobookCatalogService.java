@@ -51,6 +51,9 @@ public class AppleAudiobookCatalogService {
     private static final Pattern LABELED_NARRATOR = Pattern.compile(
             "(?i)\\bnarrator\\s+(.{2,80}?)(?:['’]s\\s+narration|\\s+returns|"
                     + "\\s+brings|\\s+reads|[\\].;:]|$)");
+    private static final Pattern INTRODUCED_NARRATOR = Pattern.compile(
+            "(?i)\\bnarrator(?:\\s+and\\s+\\p{L}+)?\\s+"
+                    + "(.{2,80}?)(?=\\s+to\\s+(?:bring|read|perform|narrate)\\b)");
     private static final Pattern AUDIOBOOK_PART = Pattern.compile(
             "(?i)\\b(?:part\\s*)?(\\d+)\\s+of\\s+(\\d+)\\b");
     private static final Pattern TRAILING_AUDIOBOOK_QUALIFIERS = Pattern.compile(
@@ -144,9 +147,9 @@ public class AppleAudiobookCatalogService {
         List<CatalogBookResult> results =
                 coalesceEquivalentAudiobooks(unique.values()).stream()
                         .sorted((left, right) -> Integer.compare(
-                                editionPreference(right, requestedIntent)
+                                editionPreference(right, requestedIntent, query)
                                         + audiobookRichness(right),
-                                editionPreference(left, requestedIntent)
+                                editionPreference(left, requestedIntent, query)
                                         + audiobookRichness(left)))
                         .toList();
         cache.put(cacheKey, new CacheEntry(now + CACHE_TTL_MILLIS, results));
@@ -155,7 +158,8 @@ public class AppleAudiobookCatalogService {
 
     private static int editionPreference(
             CatalogBookResult result,
-            AudiobookIntent requested) {
+            AudiobookIntent requested,
+            String rawQuery) {
         AudiobookIntent offered = audiobookIntent(result.title());
         int score = 0;
         if (!requested.dramatized() && !offered.dramatized()) score += 100;
@@ -167,6 +171,12 @@ public class AppleAudiobookCatalogService {
         if (requested.partNumber() == null
                 && offered.partNumber() != null) {
             score -= 10;
+        }
+        boolean requestedSpecial = normalize(rawQuery).matches(
+                ".*\\b(?:anniversary|special edition)\\b.*");
+        if (!requestedSpecial && normalize(result.title()).matches(
+                ".*\\b(?:anniversary|special edition)\\b.*")) {
+            score -= 75;
         }
         return score;
     }
@@ -239,6 +249,9 @@ public class AppleAudiobookCatalogService {
         }
         if (intent.abridged()) return "abridged";
         if (intent.unabridged()) return "unabridged";
+        String normalized = normalize(title);
+        if (normalized.contains("anniversary")) return "anniversary";
+        if (normalized.contains("special edition")) return "special-edition";
         return "standard";
     }
 
@@ -554,6 +567,7 @@ public class AppleAudiobookCatalogService {
         collectNarrator(BRACKETED_NARRATOR, description, people);
         collectNarrator(CREDITED_NARRATOR, description, people);
         collectNarrator(LABELED_NARRATOR, description, people);
+        collectNarrator(INTRODUCED_NARRATOR, description, people);
         return people.values().stream().limit(4).toList();
     }
 

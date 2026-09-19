@@ -13,6 +13,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 
 @ExtendWith(MockitoExtension.class)
 class AppleAudiobookEnrichmentTest {
@@ -59,7 +61,7 @@ class AppleAudiobookEnrichmentTest {
                 null,
                 72_000,
                 List.of(),
-                null,
+                "https://example.test/apple-audiobook.jpg",
                 null,
                 null,
                 null,
@@ -104,6 +106,9 @@ class AppleAudiobookEnrichmentTest {
         assertEquals(72_000, resolved.audiobookLengthSeconds());
         assertEquals("AUDIOBOOK", resolved.format());
         assertEquals("apple-123", resolved.providerId());
+        assertEquals(
+                "https://example.test/apple-audiobook.jpg",
+                resolved.coverImageUrl());
     }
 
     @Test
@@ -561,6 +566,144 @@ class AppleAudiobookEnrichmentTest {
         assertEquals("2008", resolved.publicationDate());
         assertEquals("The Arena Games", resolved.seriesName());
         assertEquals(1.0, resolved.seriesNumber());
+    }
+
+    @Test
+    void wikidataCorrectsOpenLibraryWorkYearWithoutDuplicatingProviders() {
+        CatalogBookResult audiobook = audiobook(
+                "A Court of Thorns and Roses",
+                "An anniversary audiobook edition.",
+                "2025-05-06T07:00:00Z");
+        CatalogBookResult openLibraryWork = work(
+                "A Court of Thorns and Roses",
+                "The original work description.",
+                "A Print Publisher",
+                "2013",
+                "en",
+                "A Court of Thorns and Roses",
+                1.0);
+        CatalogBookResult wikidataWork = new CatalogBookResult(
+                "Apple Audiobooks+Open Library+Apple Audiobooks+Open Library+WIKIDATA",
+                "apple-fixture",
+                "A Court of Thorns and Roses",
+                null,
+                List.of("A Writer"),
+                List.of("Fantasy"),
+                "The original work description.",
+                null,
+                "2015",
+                null,
+                null,
+                List.of(),
+                null,
+                "en",
+                null,
+                null,
+                "A Court of Thorns and Roses",
+                1.0,
+                "Audiobook",
+                "AUDIOBOOK");
+
+        when(openLibrary.search(
+                "A Court of Thorns and Roses",
+                null,
+                "TITLE"))
+                .thenReturn(List.of(openLibraryWork));
+        when(googleBooks.search(
+                "A Court of Thorns and Roses",
+                null,
+                "TITLE"))
+                .thenReturn(List.of());
+        when(wikidata.enrich(any())).thenReturn(wikidataWork);
+
+        CatalogBookResult resolved = service.resolve(audiobook);
+
+        assertEquals("2015", resolved.publicationDate());
+        assertEquals(
+                "Apple Audiobooks+Open Library+WIKIDATA",
+                resolved.provider());
+    }
+
+    @Test
+    void exactAudiobookEditionKeepsDateSeriesNarratorAndRuntime() {
+        CatalogBookResult audiobook = audiobook(
+                "A Court of Thorns and Roses (Court of Thorns and Roses)",
+                "The standard audiobook.",
+                "2015-05-05T07:00:00Z");
+        CatalogBookResult openLibraryWork = work(
+                "A Court of Thorns and Roses",
+                "The original work description.",
+                "Bloomsbury",
+                "2013",
+                "en",
+                "A Court of Thorns and Roses",
+                null);
+        CatalogBookResult exactAudiobookEdition = new CatalogBookResult(
+                "Apple Audiobooks+OPEN_LIBRARY",
+                "apple-fixture",
+                "A Court of Thorns and Roses (Court of Thorns and Roses)",
+                null,
+                List.of("A Writer"),
+                List.of("Fantasy"),
+                "The standard audiobook.",
+                "Recorded Books",
+                "2015-05-05T07:00:00Z",
+                null,
+                58_020,
+                List.of("Jennifer Ikeda"),
+                null,
+                "eng",
+                null,
+                "9781490676623",
+                "Court of Thorns and Roses",
+                1.0,
+                "Audiobook",
+                "AUDIOBOOK");
+        CatalogBookResult wikidataWork = new CatalogBookResult(
+                "Apple Audiobooks+OPEN_LIBRARY+WIKIDATA",
+                "apple-fixture",
+                "A Court of Thorns and Roses",
+                null,
+                List.of("A Writer"),
+                List.of("Fantasy"),
+                "The original work description.",
+                null,
+                "2013",
+                null,
+                null,
+                List.of(),
+                null,
+                "eng",
+                null,
+                null,
+                "A Court of Thorns and Roses",
+                1.0,
+                "Audiobook",
+                "AUDIOBOOK");
+
+        when(openLibrary.search(
+                "A Court of Thorns and Roses",
+                null,
+                "TITLE"))
+                .thenReturn(List.of(openLibraryWork));
+        when(googleBooks.search(
+                "A Court of Thorns and Roses",
+                null,
+                "TITLE"))
+                .thenReturn(List.of());
+        when(openLibrary.enrichAudiobookEdition(
+                any(CatalogBookResult.class),
+                eq(openLibraryWork.providerId())))
+                .thenReturn(exactAudiobookEdition);
+        when(wikidata.enrich(any())).thenReturn(wikidataWork);
+
+        CatalogBookResult resolved = service.resolve(audiobook);
+
+        assertEquals("2015-05-05T07:00:00Z", resolved.publicationDate());
+        assertEquals(1.0, resolved.seriesNumber());
+        assertEquals(List.of("Jennifer Ikeda"), resolved.narrators());
+        assertEquals(58_020, resolved.audiobookLengthSeconds());
+        assertEquals("9781490676623", resolved.isbn13());
     }
 
     private static CatalogBookResult audiobook(
