@@ -716,7 +716,7 @@ class BookCatalogCombinedFormatSearchTest {
     }
 
     @Test
-    void partialTitleDiscoveryReturnsDistinctAcotarWorksInsteadOfFormats() {
+    void partialTitleDiscoveryKeepsDistinctLegitimatePrefixMatches() {
         CatalogBookResult thornsPrint = resultWithMetadata(
                 "Open Library", "thorns-print",
                 "A Court of Thorns and Roses", "Sarah J. Maas", null,
@@ -758,6 +758,8 @@ class BookCatalogCombinedFormatSearchTest {
                 results.stream().limit(3).map(CatalogBookResult::title).toList());
         assertEquals(1, results.stream().filter(result ->
                 result.title().equals("A Court of Thorns and Roses")).count());
+        assertTrue(results.stream().anyMatch(result ->
+                result.providerId().equals("inquiry-print")));
     }
 
     @Test
@@ -1000,6 +1002,107 @@ class BookCatalogCombinedFormatSearchTest {
         assertFalse(results.stream().limit(3).anyMatch(result ->
                 "ger".equals(result.language())
                         || result.providerId().equals("acotar-audio-de")));
+    }
+
+    @Test
+    void exactTitleRejectsMislabeledAudioCompanionsAndCoverlessPrint() {
+        CatalogBookResult mislabeledGraphicAudio = new CatalogBookResult(
+                "Open Library", "acotar-graphic-audio-physical",
+                "A Court of Thorns and Roses - Part 2",
+                null, List.of("Sarah J. Maas"), List.of(), null,
+                "Graphic Audio LLC", "2022", null, null, List.of(),
+                "https://example.com/graphic-audio.jpg", "eng",
+                "1685082777", "9781685082772", null, null,
+                "Book catalog record", "PHYSICAL");
+        CatalogBookResult coverlessPhysical = new CatalogBookResult(
+                "Open Library", "acotar-coverless-physical",
+                "A Court of Thorns and Roses",
+                null, List.of(), List.of(), null,
+                "Perfection Learning Corporation", "2019", null, null,
+                List.of(), null, null, "1663616574", "9781663616579",
+                null, null, "Book catalog record", "PHYSICAL");
+        CatalogBookResult standardPhysical = new CatalogBookResult(
+                "Google Books", "acotar-standard-physical",
+                "A Court of Thorns and Roses",
+                null, List.of("Sarah J. Maas"), List.of("Fantasy"),
+                "Canonical story description.", "Bloomsbury", "2015",
+                432, null, List.of(),
+                "https://example.com/acotar-standard.jpg", "en",
+                "1619634449", "9781619634442",
+                "A Court of Thorns and Roses", 1.0,
+                "Hardcover", "PHYSICAL");
+        CatalogBookResult standardEbook = new CatalogBookResult(
+                "Google Books", "acotar-standard-ebook",
+                "A Court of Thorns and Roses",
+                null, List.of("Sarah J. Maas"), List.of("Fantasy"),
+                "Canonical story description.", "Bloomsbury", "2015",
+                432, null, List.of(),
+                "https://example.com/acotar-ebook.jpg", "en",
+                null, "9781619634459",
+                "A Court of Thorns and Roses", 1.0,
+                "Ebook", "EBOOK");
+        CatalogBookResult anniversaryAudio = new CatalogBookResult(
+                "Apple Audiobooks", "acotar-anniversary-audio",
+                "A Court of Thorns and Roses (10th Anniversary Recording)",
+                null, List.of("Sarah J. Maas"), List.of("Fantasy"),
+                "Anniversary recording.", "Recorded Books", "2025",
+                null, 57_600, List.of("Elizabeth Evans"),
+                "https://example.com/acotar-audio.jpg", "en",
+                null, null, "A Court of Thorns and Roses", 1.0,
+                "Unabridged Audiobook", "AUDIOBOOK");
+        CatalogBookResult standardAudio = new CatalogBookResult(
+                "Apple Audiobooks", "acotar-standard-audio",
+                "A Court of Thorns and Roses (Court of Thorns and Roses)",
+                null, List.of("Sarah J. Maas"), List.of("Fantasy"),
+                "Canonical story description.", "Recorded Books", "2015",
+                null, null, List.of(),
+                "https://example.com/acotar-standard-audio.jpg", null,
+                null, null, null, null,
+                "Audiobook", "AUDIOBOOK");
+        CatalogBookResult companion = new CatalogBookResult(
+                "Open Library", "acotar-conversations",
+                "Conversations on A Court of Thorns and Roses by Sarah J. Maas",
+                null, List.of("daily Books"), List.of(), null,
+                "CreateSpace", "2016", 66, null, List.of(),
+                "https://example.com/conversations.jpg", "eng",
+                "1540811441", "9781540811448", null, null,
+                "Paperback", "PHYSICAL");
+
+        when(openLibrary.search(
+                "A Court of Thorns and Roses", null, "TITLE"))
+                .thenReturn(List.of(
+                        mislabeledGraphicAudio,
+                        coverlessPhysical,
+                        companion));
+        when(googleBooks.search(
+                "A Court of Thorns and Roses", null, "TITLE"))
+                .thenReturn(List.of(standardPhysical));
+        when(googleBooks.search(
+                "A Court of Thorns and Roses", "EBOOK", "TITLE"))
+                .thenReturn(List.of(standardEbook));
+        when(appleAudiobooks.search(
+                "A Court of Thorns and Roses", "AUDIOBOOK", "TITLE"))
+                .thenReturn(List.of(anniversaryAudio, standardAudio));
+
+        List<CatalogBookResult> results = service.search(
+                "A Court of Thorns and Roses", null, "TITLE");
+
+        assertEquals(
+                List.of(
+                        "acotar-standard-physical",
+                        "acotar-standard-ebook",
+                        "acotar-standard-audio"),
+                results.stream()
+                        .limit(3)
+                        .map(CatalogBookResult::providerId)
+                        .toList());
+        assertTrue(results.stream().allMatch(result ->
+                result.coverImageUrl() != null
+                        && !result.coverImageUrl().isBlank()));
+        assertFalse(results.stream().anyMatch(result ->
+                result.providerId().equals("acotar-graphic-audio-physical")
+                        || result.providerId().equals("acotar-coverless-physical")
+                        || result.providerId().equals("acotar-conversations")));
     }
 
     private static CatalogBookResult result(

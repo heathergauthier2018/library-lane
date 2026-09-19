@@ -12,12 +12,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class OpenLibraryCatalogService {
 
     private static final String SEARCH_URL = "https://openlibrary.org/search.json";
     private static final String WORK_URL = "https://openlibrary.org/works/{workId}.json";
+    private static final String EDITIONS_URL =
+            "https://openlibrary.org/works/{workId}/editions.json?limit=100";
     private static final String EDITION_URL = "https://openlibrary.org/isbn/{isbn}.json";
 
     private final RestClient restClient;
@@ -120,6 +124,251 @@ public class OpenLibraryCatalogService {
                 result.editionFormat(),
                 result.format()
         );
+    }
+
+    /**
+     * Replaces flattened work-search fields with one coherent English
+     * edition. Search documents combine publishers, ISBNs, dates, and
+     * languages from every edition and those array positions are unrelated.
+     */
+    public CatalogBookResult enrichWithBestEdition(CatalogBookResult result) {
+        if (result == null || !"OPEN_LIBRARY".equals(result.provider())) {
+            return result;
+        }
+        String workId = normalizeWorkId(result.providerId());
+        if (workId == null) return result;
+
+        try {
+            JsonNode response = restClient.get()
+                    .uri(EDITIONS_URL, workId)
+                    .retrieve()
+                    .body(JsonNode.class);
+            if (response == null || !response.path("entries").isArray()) {
+                return result;
+            }
+
+            JsonNode best = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (JsonNode edition : response.path("entries")) {
+                int score = editionScore(edition, result);
+                if (score > bestScore) {
+                    best = edition;
+                    bestScore = score;
+                }
+            }
+            return best == null || bestScore < 0
+                    ? result : mergeEdition(result, best);
+        } catch (RuntimeException error) {
+            System.err.println(
+                    "Open Library editions lookup failed for " + workId
+                            + ": " + error.getMessage());
+            return result;
+        }
+    }
+
+    public CatalogBookResult enrichAudiobookEdition(
+            CatalogBookResult selected,
+            String rawWorkId) {
+        if (selected == null
+                || !"AUDIOBOOK".equalsIgnoreCase(selected.format())) {
+            return selected;
+        }
+        String workId = normalizeWorkId(rawWorkId);
+        if (workId == null) return selected;
+
+        try {
+            JsonNode response = restClient.get()
+                    .uri(EDITIONS_URL, workId)
+                    .retrieve()
+                    .body(JsonNode.class);
+            if (response == null || !response.path("entries").isArray()) {
+                return selected;
+            }
+
+            JsonNode best = null;
+            int bestScore = Integer.MIN_VALUE;
+            for (JsonNode edition : response.path("entries")) {
+                int score = audiobookEditionScore(edition, selected);
+                if (score > bestScore) {
+                    best = edition;
+                    bestScore = score;
+                }
+            }
+            return best == null || bestScore < 0
+                    ? selected : mergeAudiobookEdition(selected, best);
+        } catch (RuntimeException error) {
+            System.err.println(
+                    "Open Library audiobook-edition lookup failed for "
+                            + workId + ": " + error.getMessage());
+            return selected;
+        }
+    }
+
+    private static int audiobookEditionScore(
+            JsonNode edition,
+            CatalogBookResult selected) {
+        String editionTitle = normalize(text(edition.path("title")));
+        String selectedTitle = normalize(selected.title());
+        if (!(editionTitle.equals(selectedTitle)
+                || selectedTitle.startsWith(editionTitle + " "))) return -1000;
+
+        String format = normalize(text(edition.path("physical_format")));
+        if (!(format.contains("audio")
+                || format.contains("sound recording"))) return -1000;
+
+        List<String> languages = editionLanguages(edition.path("languages"));
+        if (!languages.isEmpty()
+                && languages.stream().noneMatch(OpenLibraryCatalogService::isEnglish)) {
+            return -1000;
+        }
+
+        int score = 500;
+        Integer selectedYear = publicationYear(selected.publicationDate());
+        Integer editionYear = publicationYear(text(edition.path("publish_date")));
+        if (selectedYear != null && editionYear != null) {
+            score += Math.max(0, 500 - Math.abs(selectedYear - editionYear) * 100);
+        }
+        String publishers = normalize(String.join(" ",
+                strings(edition.path("publishers"))));
+        if (hasText(selected.publisher())
+                && publishers.contains(normalize(selected.publisher()))) score += 150;
+        String notes = editionNotes(edition);
+        if (notes.toLowerCase(Locale.ROOT).contains("narrated by")) score += 100;
+        if (notes.toLowerCase(Locale.ROOT).contains("length:")) score += 100;
+        if (!strings(edition.path("isbn_13")).isEmpty()) score += 25;
+        return score;
+    }
+
+    private static CatalogBookResult mergeAudiobookEdition(
+            CatalogBookResult selected,
+            JsonNode edition) {
+        String notes = editionNotes(edition);
+        List<String> narrators = selected.narrators().isEmpty()
+                ? audiobookNarrators(notes) : selected.narrators();
+        Integer duration = selected.audiobookLengthSeconds() != null
+                ? selected.audiobookLengthSeconds() : audiobookDuration(notes);
+        Double seriesNumber = selected.seriesNumber() != null
+                ? selected.seriesNumber()
+                : seriesNumber(text(edition.path("subtitle")));
+        List<String> isbn10s = strings(edition.path("isbn_10"));
+        List<String> isbn13s = strings(edition.path("isbn_13"));
+
+        return new CatalogBookResult(
+                selected.provider(), selected.providerId(), selected.title(),
+                selected.subtitle(), selected.authors(), selected.genres(),
+                selected.description(), selected.publisher(),
+                preferText(text(edition.path("publish_date")),
+                        selected.publicationDate()),
+                null, duration, narrators, selected.coverImageUrl(), "eng",
+                hasText(selected.isbn10()) ? selected.isbn10() : first(isbn10s),
+                hasText(selected.isbn13()) ? selected.isbn13() : first(isbn13s),
+                selected.seriesName(), seriesNumber,
+                hasText(selected.editionFormat())
+                        ? selected.editionFormat()
+                        : text(edition.path("edition_name")),
+                selected.format());
+    }
+
+    private static String editionNotes(JsonNode edition) {
+        JsonNode notes = edition.path("notes");
+        return notes.isTextual() ? text(notes) : text(notes.path("value"));
+    }
+
+    private static List<String> audiobookNarrators(String notes) {
+        Matcher matcher = Pattern.compile(
+                "(?im)^Narrated by:\\s*(.+)$").matcher(notes);
+        if (!matcher.find()) return List.of();
+        return java.util.Arrays.stream(matcher.group(1).split("\\s*(?:,|&| and )\\s*"))
+                .map(String::trim).filter(OpenLibraryCatalogService::hasText).toList();
+    }
+
+    private static Integer audiobookDuration(String notes) {
+        Matcher matcher = Pattern.compile(
+                "(?i)Length:\\s*(?:(\\d+)\\s*hours?)?\\s*(?:(\\d+)\\s*minutes?)?")
+                .matcher(notes);
+        if (!matcher.find()) return null;
+        int hours = matcher.group(1) == null ? 0 : Integer.parseInt(matcher.group(1));
+        int minutes = matcher.group(2) == null ? 0 : Integer.parseInt(matcher.group(2));
+        int seconds = hours * 3600 + minutes * 60;
+        return seconds > 0 ? seconds : null;
+    }
+
+    private static int editionScore(
+            JsonNode edition,
+            CatalogBookResult selected) {
+        String title = text(edition.path("title"));
+        if (!normalize(title).equals(normalize(selected.title()))) return -1000;
+
+        List<String> languages = editionLanguages(edition.path("languages"));
+        if (!languages.isEmpty()
+                && languages.stream().noneMatch(OpenLibraryCatalogService::isEnglish)) {
+            return -1000;
+        }
+
+        String physicalFormat = normalize(text(edition.path("physical_format")));
+        boolean audio = physicalFormat.contains("audio")
+                || physicalFormat.contains("sound recording");
+        boolean ebook = physicalFormat.contains("ebook")
+                || physicalFormat.contains("electronic");
+        boolean wantsEbook = "EBOOK".equalsIgnoreCase(selected.format());
+        if (audio || (wantsEbook && !ebook) || (!wantsEbook && ebook)) return -1000;
+
+        int score = 500;
+        if (!languages.isEmpty()) score += 150;
+        if (wantsEbook) score += 250;
+        if (!wantsEbook && (physicalFormat.contains("hardcover")
+                || physicalFormat.contains("paperback"))) score += 100;
+        if (!wantsEbook && physicalFormat.contains("hardcover")) score += 20;
+        if (!strings(edition.path("publishers")).isEmpty()) score += 50;
+        if (integer(edition.path("number_of_pages")) != null) score += 50;
+        if (!strings(edition.path("isbn_13")).isEmpty()) score += 50;
+        if (edition.path("covers").isArray()
+                && !edition.path("covers").isEmpty()) score += 25;
+
+        Integer editionYear = publicationYear(text(edition.path("publish_date")));
+        Integer workYear = publicationYear(selected.publicationDate());
+        if (editionYear != null && workYear != null) {
+            score += Math.max(0, 100 - Math.abs(editionYear - workYear));
+        }
+        return score;
+    }
+
+    private static CatalogBookResult mergeEdition(
+            CatalogBookResult selected,
+            JsonNode edition) {
+        List<String> isbn10s = strings(edition.path("isbn_10"));
+        List<String> isbn13s = strings(edition.path("isbn_13"));
+        List<String> publishers = strings(edition.path("publishers"));
+        Integer coverId = edition.path("covers").isArray()
+                && !edition.path("covers").isEmpty()
+                ? integer(edition.path("covers").get(0)) : null;
+        String cover = coverId == null ? selected.coverImageUrl()
+                : "https://covers.openlibrary.org/b/id/" + coverId + "-L.jpg";
+        String physicalFormat = text(edition.path("physical_format"));
+
+        return new CatalogBookResult(
+                selected.provider(), selected.providerId(), selected.title(),
+                selected.subtitle(), selected.authors(), selected.genres(),
+                selected.description(), first(publishers),
+                preferText(text(edition.path("publish_date")), selected.publicationDate()),
+                integer(edition.path("number_of_pages")),
+                selected.audiobookLengthSeconds(), selected.narrators(), cover,
+                "eng", first(isbn10s), first(isbn13s), selected.seriesName(),
+                selected.seriesNumber(), hasText(physicalFormat)
+                        ? physicalFormat : selected.editionFormat(), selected.format());
+    }
+
+    private static List<String> editionLanguages(JsonNode node) {
+        List<String> languages = new ArrayList<>();
+        if (!node.isArray()) return languages;
+        node.forEach(language -> languages.add(text(language.path("key"))));
+        return languages;
+    }
+
+    private static boolean isEnglish(String value) {
+        String normalized = normalize(value);
+        return normalized.endsWith(" eng") || normalized.equals("eng")
+                || normalized.equals("en");
     }
 
     public List<CatalogBookResult> search(
@@ -324,7 +573,7 @@ public class OpenLibraryCatalogService {
                 null,
                 List.of(),
                 cover,
-                first(strings(doc.path("language"))),
+                preferredLanguage(strings(doc.path("language"))),
                 isbn10,
                 isbn13,
                 cleanSeriesName(seriesName),
@@ -342,6 +591,20 @@ public class OpenLibraryCatalogService {
             case "AUTHOR", "SERIES" -> normalized;
             default -> "TITLE";
         };
+    }
+
+    private static String preferredLanguage(List<String> languages) {
+        return languages.stream()
+                .filter(OpenLibraryCatalogService::hasText)
+                .filter(language -> {
+                    String normalized = language.trim().toLowerCase(
+                            Locale.ROOT);
+                    return "en".equals(normalized)
+                            || "eng".equals(normalized)
+                            || normalized.startsWith("en-");
+                })
+                .findFirst()
+                .orElse(first(languages));
     }
 
     private static String normalizeFormat(String value) {
@@ -678,6 +941,12 @@ public class OpenLibraryCatalogService {
 
     private static String clean(String value) {
         return value == null ? "" : value.trim().replaceAll("\\s+", " ");
+    }
+
+    private static String normalize(String value) {
+        return clean(value).toLowerCase(Locale.ROOT)
+                .replaceAll("[^\\p{L}\\p{N}]+", " ")
+                .trim();
     }
 
     private static String valueOrEmpty(String value) {

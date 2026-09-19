@@ -75,7 +75,9 @@ public class GoogleBooksCatalogService {
         // Combine the field-specific search with Google's general relevance
         // search. The latter is especially important while the reader is only
         // partway through a word (for example "iro" or "reb").
-        if (searchBy != SearchBy.SERIES) {
+        boolean hasStrongFieldMatch = candidates.stream()
+                .anyMatch(candidate -> candidate.score() >= 850);
+        if (searchBy != SearchBy.SERIES && !hasStrongFieldMatch) {
             collectCandidates(
                     fetch(query, requestedFormat),
                     normalizedFormat,

@@ -472,10 +472,10 @@ public class BookCatalogSearchService {
 
     private static boolean isEligibleDiscoveryResult(
             CatalogBookResult result) {
-        if (!isAudiobookFormat(result.format())) return true;
         String evidence = normalize(String.join(" ",
                 safeTitle(result.title()),
-                safeTitle(result.editionFormat())));
+                safeTitle(result.editionFormat()),
+                safeTitle(result.publisher())));
         return !evidence.contains("dramatized adaptation")
                 && !evidence.contains("graphic audio")
                 && !evidence.matches(".*\\bpart \\d+ of \\d+\\b.*")
@@ -696,11 +696,40 @@ public class BookCatalogSearchService {
         for (CatalogBookResult result : ranked) {
             if (!promoted.contains(result)
                     && languageSortRank(result) < 2
-                    && !looksLikeTranslatedAudiobook(result, cleanedQuery)) {
+                    && !looksLikeTranslatedAudiobook(result, cleanedQuery)
+                    && shouldKeepCoverCandidate(
+                            result,
+                            ranked,
+                            cleanedQuery)) {
                 prioritized.add(result);
             }
         }
         return prioritized;
+    }
+
+    private static boolean shouldKeepCoverCandidate(
+            CatalogBookResult candidate,
+            List<CatalogBookResult> ranked,
+            String cleanedQuery) {
+        if (hasText(candidate.coverImageUrl())) return true;
+
+        String candidateFormat = normalize(candidate.format());
+        String candidateAuthor = canonicalPrimaryAuthorKey(
+                candidate.authors());
+        return ranked.stream().noneMatch(alternative ->
+                alternative != candidate
+                        && hasText(alternative.coverImageUrl())
+                        && normalize(alternative.format()).equals(
+                        candidateFormat)
+                        && (strongWorkTitleMatch(
+                        alternative,
+                        cleanedQuery)
+                        || discoveryTitle(alternative).equals(
+                        discoveryTitle(candidate)))
+                        && (candidateAuthor.isBlank()
+                        || canonicalPrimaryAuthorKey(
+                        alternative.authors()).equals(
+                        candidateAuthor)));
     }
 
     private static boolean looksLikeTranslatedAudiobook(
@@ -738,17 +767,35 @@ public class BookCatalogSearchService {
     private static Comparator<CatalogBookResult> leadPreference(
             String cleanedQuery) {
         return Comparator
-                .comparingInt(BookCatalogSearchService::languageSortRank)
+                .comparingInt((CatalogBookResult result) ->
+                        audiobookEditionSortRank(result, cleanedQuery))
+                .thenComparingInt(BookCatalogSearchService::languageSortRank)
                 .thenComparing(Comparator.comparingInt(
                         (CatalogBookResult result) ->
                                 leadPreferenceScore(result, cleanedQuery))
                         .reversed());
     }
 
+    private static int audiobookEditionSortRank(
+            CatalogBookResult result,
+            String cleanedQuery) {
+        if (!isAudiobookFormat(result.format())
+                || requestsSpecialAudiobookEdition(cleanedQuery)) {
+            return 0;
+        }
+        return isSpecialAudiobookEdition(result) ? 1 : 0;
+    }
+
     private static int leadPreferenceScore(
             CatalogBookResult result,
             String cleanedQuery) {
         int score = strongWorkTitleMatch(result, cleanedQuery) ? 100 : 0;
+
+        if (isAudiobookFormat(result.format())
+                && !requestsSpecialAudiobookEdition(cleanedQuery)
+                && isSpecialAudiobookEdition(result)) {
+            score -= 200;
+        }
 
         if (isEnglish(result.language())) {
             score += 40;
@@ -763,6 +810,21 @@ public class BookCatalogSearchService {
         }
 
         return score;
+    }
+
+    private static boolean requestsSpecialAudiobookEdition(String value) {
+        String normalized = normalize(value);
+        return normalized.contains("anniversary")
+                || normalized.contains("special edition");
+    }
+
+    private static boolean isSpecialAudiobookEdition(
+            CatalogBookResult result) {
+        String evidence = normalize(String.join(" ",
+                safeTitle(result.title()),
+                safeTitle(result.editionFormat())));
+        return evidence.contains("anniversary")
+                || evidence.contains("special edition");
     }
     private static int languageSortRank(CatalogBookResult result) {
         if (isEnglish(result.language())) return 0;
@@ -1001,7 +1063,16 @@ public class BookCatalogSearchService {
         // years seen in the previous checkpoint.
         try {
             if (provider.contains("open library")) {
-                resolved = openLibrary.enrichWithWorkDetails(resolved);
+                CatalogBookResult workEnriched =
+                        openLibrary.enrichWithWorkDetails(resolved);
+                if (workEnriched != null) {
+                    resolved = workEnriched;
+                }
+                CatalogBookResult editionEnriched =
+                        openLibrary.enrichWithBestEdition(resolved);
+                if (editionEnriched != null) {
+                    resolved = editionEnriched;
+                }
             } else if (hasText(selectedResult.isbn13()) || hasText(selectedResult.isbn10())) {
                 CatalogBookResult work = openLibrary.findWorkByIsbn(
                         hasText(selectedResult.isbn13())
@@ -1095,9 +1166,9 @@ public class BookCatalogSearchService {
                 return audiobook;
             }
 
-            String publicationDate = trustworthyEarlierWorkDate(
-                    audiobook.publicationDate(),
-                    enriched.publicationDate());
+            String publicationDate = authoritativeWorkDate(
+                    audiobook,
+                    enriched);
             String seriesName = discoverAudiobookSeriesName(
                     audiobook,
                     List.of(enriched));
@@ -1155,15 +1226,31 @@ public class BookCatalogSearchService {
             System.err.println("Google Books audiobook enrichment failed: " + error.getMessage());
         }
 
+        CatalogBookResult selectedForMatching = selected;
         List<CatalogBookResult> matchedSupplements = supplements.stream()
                 .map(BookCatalogSearchService::cleanMetadata)
                 .filter(candidate -> !looksLikeAncillaryRecord(candidate))
-                .filter(candidate -> sameAudiobookWork(selected, candidate, baseTitle))
+                .filter(candidate -> sameAudiobookWork(
+                        selectedForMatching, candidate, baseTitle))
                 // The Apple request is for the U.S. storefront. A record that
                 // explicitly identifies another language is not safe evidence
                 // for its publisher, publication date, synopsis, or series.
                 .filter(BookCatalogSearchService::acceptableAudiobookSupplement)
                 .toList();
+
+        String openLibraryWorkId = matchedSupplements.stream()
+                .filter(candidate -> normalize(candidate.provider())
+                        .contains("open library"))
+                .map(CatalogBookResult::providerId)
+                .filter(BookCatalogSearchService::hasText)
+                .findFirst()
+                .orElse(null);
+        if (hasText(openLibraryWorkId)) {
+            CatalogBookResult editionEnriched =
+                    openLibrary.enrichAudiobookEdition(
+                            selected, openLibraryWorkId);
+            if (editionEnriched != null) selected = editionEnriched;
+        }
 
         Map<String, CatalogBookResult> enrichedWorks = new LinkedHashMap<>();
         matchedSupplements.forEach(candidate -> enrichedWorks.merge(
@@ -1177,7 +1264,7 @@ public class BookCatalogSearchService {
 
         Double discoveredSeriesNumber = discoverAudiobookSeriesNumber(
                 selected,
-                enrichedWorks.values());
+                matchedSupplements);
         String discoveredSeriesName = discoverAudiobookSeriesName(
                 selected,
                 matchedSupplements);
@@ -1235,6 +1322,13 @@ public class BookCatalogSearchService {
     private static String trustedOriginalPublicationDate(
             CatalogBookResult audiobook,
             List<CatalogBookResult> supplements) {
+        // Once edition enrichment has attached an ISBN, the audiobook date is
+        // tied to that exact recording. Work-level dates describe the story,
+        // not the selected audio edition, and must not replace it.
+        if (hasText(audiobook.isbn10()) || hasText(audiobook.isbn13())) {
+            return audiobook.publicationDate();
+        }
+
         Integer appleYear = publicationYear(audiobook.publicationDate());
         Map<Integer, Set<String>> yearSources = new LinkedHashMap<>();
         addPublicationYearVote(yearSources, appleYear, "apple");
@@ -1334,7 +1428,7 @@ public class BookCatalogSearchService {
                 null,
                 audiobook.audiobookLengthSeconds(),
                 safe(audiobook.narrators()),
-                prefer(work.coverImageUrl(), audiobook.coverImageUrl()),
+                prefer(audiobook.coverImageUrl(), work.coverImageUrl()),
                 prefer(work.language(), audiobook.language()),
                 audiobook.isbn10(),
                 audiobook.isbn13(),
@@ -1526,6 +1620,12 @@ public class BookCatalogSearchService {
                 .map(Map.Entry::getKey)
                 .orElse(null);
         if (consensus != null) return consensus;
+
+        // Edition enrichment is exact enough to keep its structured series
+        // position unless independent catalogs agree that it is wrong.
+        if (selected.seriesNumber() != null) {
+            return selected.seriesNumber();
+        }
 
         // Use only structured fields, a number paired with this exact title,
         // or contextual wording tied directly to a named series. This avoids
@@ -2102,6 +2202,7 @@ public class BookCatalogSearchService {
     private static boolean looksLikeAncillaryWork(String value) {
         String title = normalize(value);
         return title.startsWith("workbook ")
+                || title.startsWith("conversations on ")
                 || title.startsWith("study guide ")
                 || title.startsWith("summary of ")
                 || title.startsWith("analysis of ")
@@ -2244,6 +2345,12 @@ public class BookCatalogSearchService {
             editionIdentity = language.isBlank()
                     ? "language:unknown"
                     : "language:" + language;
+        }
+
+        if (isAudiobookFormat(result.format())) {
+            editionIdentity += isSpecialAudiobookEdition(result)
+                    ? "|audio-edition:special"
+                    : "|audio-edition:standard";
         }
 
         return identity(result) + "|" + editionIdentity;
@@ -2852,9 +2959,37 @@ public class BookCatalogSearchService {
     }
 
     private static String combinedProvider(String first, String second) {
-        if (first == null) return second;
-        if (second == null || first.contains(second)) return first;
-        return first + "+" + second;
+        Map<String, String> providers = new LinkedHashMap<>();
+        addProviders(providers, first);
+        addProviders(providers, second);
+        return providers.isEmpty() ? null : String.join("+", providers.values());
+    }
+
+    private static void addProviders(
+            Map<String, String> providers,
+            String value) {
+        if (!hasText(value)) return;
+        for (String provider : value.split("\\+")) {
+            String cleaned = provider.trim();
+            if (cleaned.isEmpty()) continue;
+            providers.putIfAbsent(normalize(cleaned), cleaned);
+        }
+    }
+
+    private static String authoritativeWorkDate(
+            CatalogBookResult selected,
+            CatalogBookResult enriched) {
+        if (hasText(selected.isbn10()) || hasText(selected.isbn13())) {
+            return selected.publicationDate();
+        }
+        if (normalize(enriched.provider()).contains("wikidata")
+                && plausiblePublicationYear(
+                publicationYear(enriched.publicationDate()))) {
+            return enriched.publicationDate();
+        }
+        return trustworthyEarlierWorkDate(
+                selected.publicationDate(),
+                enriched.publicationDate());
     }
 
     private static String prefer(String first, String second) {
